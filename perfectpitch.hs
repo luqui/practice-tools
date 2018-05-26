@@ -44,15 +44,18 @@ playNote conn note vel dur = void . forkIO $ do
 
 playMask :: MIDI.Connection -> IO ()
 playMask conn = do
-    replicateM_ 6 $ do
+    replicateM_ 4 $ do
         chords <- Rand.evalRandIO random251
         forM_ chords $ \chord -> do
             forM_ chord $ \note -> do
                 playNote conn note 64 0.25
             threadDelay 300000
+
+        replicateM_ 3 $ do
+            note <- Rand.evalRandIO $ Rand.uniform [48..72]
+            playNote conn note 64 0.25
+            threadDelay 300000
         threadDelay 300000
-    
-    threadDelay 1000000
 
 gameRound :: MIDI.Connection -> IO ()
 gameRound conn = do
@@ -66,8 +69,17 @@ gameRound conn = do
         hFlush stdout
         guess <- getLine
         case parseNote guess of
-            Just g | g == note -> putStrLn "Yes!" >> playMask conn
-                   | otherwise -> putStrLn "No!" >> noteRound note octave
+            Just g 
+              | g == note -> do
+                putStrLn "Yes!"
+                MIDI.send conn $ MIDI.MidiMessage 1 (MIDI.NoteOn (note+octave) 64)
+                putStrLn "Press enter for next round"
+                getLine
+                MIDI.send conn $ MIDI.MidiMessage 1 (MIDI.NoteOn (note+octave) 0)
+                playMask conn
+              | otherwise -> do
+                putStrLn "No!"
+                noteRound note octave
             Nothing -> putStrLn "What?" >> noteRound note octave
     
 
