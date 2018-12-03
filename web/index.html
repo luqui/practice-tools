@@ -140,7 +140,7 @@
       var renderPatterns = function(container) {
         var first = true;
         for (var i = 0; i < metronomePatterns.length; i++) {
-          var renderDiv = $('<div>');
+          var renderSpan = $('<span>');
           var input = $('<input>').attr('type', 'radio')
                                   .attr('name', container.attr('id'))
                                   .attr('value', i);
@@ -152,15 +152,15 @@
           $(container)
             .append($('<li>')
               .append(input)
-              .append(renderDiv));
+              .append(renderSpan));
             
 
-          var renderer = new VF.Renderer(renderDiv[0], VF.Renderer.Backends.SVG);
-          renderer.resize(500, 100);
+          var renderer = new VF.Renderer(renderSpan[0], VF.Renderer.Backends.SVG);
+          renderer.resize(500, 50);
           var cx = renderer.getContext();
 
-          var stave = new VF.Stave(0, 0, 500);
-          stave.setContext(cx).draw();
+          var stave = new VF.Stave(0, -50, 500);
+          //stave.setContext(cx).draw();
 
           metronomePatterns[i].notation(cx, stave);
         }
