@@ -1,9 +1,27 @@
 <html>
   <head>
+    <style>
+    #skillMeter {
+      width: 500px;
+      background-color: lightgray;
+    }
+    #skillReading {
+      width: 1%;
+      height: 30px;
+      background-color: lightgreen;
+    }
+    </style>
+
     <script src="jquery-3.3.1.js"></script>
     <script src="vexflow-debug.js"></script>
     <script>
       var outdevice = null;
+
+      var sendMIDI = function(data) {
+        if (outdevice) {
+          outdevice.send(data);
+        }
+      };
 
       var setDeviceList = function(sel, devs, onchange) {
         $('#devices').empty();
@@ -44,9 +62,12 @@
       var initializeMetronome = function() {
         metronome = null;
         $('#metronomeStart').text('Start');
-        $('#metronomeStart').click(e => {
+        $('#metronomeStart').off('click').click(e => {
           var note = parseInt($('#metronomeNote').val());
-          metronome = Metronome(parseInt($('#metronomeTempo').val()), beatno => outdevice.send([0x91, note, 0x7f]));
+          metronome = Metronome(parseInt($('#metronomeTempo').val()), beatno => {
+            sendMIDI([0x91, note, 0x50]);
+            setTimeout(() => sendMIDI([0x91, note, 0], 30));
+          });
           $('#metronomeStart').text('Stop');
           $('#metronomeStart').off('click').on('click', e => {
             metronome.stop();
@@ -55,18 +76,45 @@
         });
       };
 
+      var SkillMeter = function(barElem, notches, penalty) {
+        var score = 0;
+        var update = () => $(barElem).css('width', Math.round(100.0*score/notches) + '%');
+        update();
+        return {
+          hit: () => {
+            score++;
+            console.log("Hit:", score);
+            score = Math.min(score, notches);
+            update();
+          },
+          miss: () => {
+            score *= penalty;
+            console.log("Miss:", score);
+            update();
+          },
+        };
+      };
+
+      var skillmeter = null;
+
       $(() => {
         navigator.requestMIDIAccess().then(access => {
           setDeviceList($('#indevices'), Array.from(access.inputs.values()), inp => {
             inp.onmidimessage = msg => {
               if (metronome && msg.data[0] == 0x90 && msg.data[2] != 0) {
                 var beats = metronome.measure();
-                var roundBeats = Math.round(beats);
+                var roundBeats = Math.round(4*beats)/4.0;
 
-                $('#log').append($('<div>').text(roundBeats + " (" + parseInt(metronome.toMS(beats - roundBeats)) + ")"));
+                if (Math.abs(metronome.toMS(roundBeats - beats)) < 35) {
+                  sendMIDI(msg.data);
+                  if (skillmeter) { skillmeter.hit(); }
+                }
+                else {
+                  if (skillmeter) { skillmeter.miss(); }
+                }
               }
-              if (outdevice) {
-                outdevice.send(msg.data);
+              else {
+                sendMIDI(msg.data);
               }
             };
           });
@@ -79,6 +127,8 @@
           $('#outdevices').val(0).change();
 
           initializeMetronome();
+
+          skillmeter = SkillMeter($('#skillReading'), 200, 0.75);
         });
 
       });
@@ -90,5 +140,10 @@
     <br/>
     <b>Metronome:</b> Note <input id="metronomeNote" value="42">, Tempo <input id="metronomeTempo" type="text" value="100" /><button id="metronomeStart"></button>
     <pre id="log"></pre>
+
+    <div id="skillMeter">
+      <div id="skillReading"></div>
+    </div>
+      
   </body>
 </html>
