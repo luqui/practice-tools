@@ -1,0 +1,44 @@
+<html>
+  <head>
+    <script src="jquery-3.3.1.js"></script>
+    <script src="vexflow-debug.js"></script>
+    <script>
+      var outdevice = null;
+
+      var setDeviceList = function(sel, devs, onchange) {
+        $('#devices').empty();
+        $(sel).append($('<option>').attr('value', null).text("None"));
+        for (var i = 0; i < devs.length; i++) {
+          $(sel).append(
+            $('<option>').attr('value', i).text(devs[i].name));
+        }
+        $(sel).change(e => {
+          onchange(devs[$(sel).val()]);
+        });
+      };
+
+      $(() => {
+        navigator.requestMIDIAccess().then(access => {
+          console.log("midi access: ", access);
+          setDeviceList($('#indevices'), Array.from(access.inputs.values()), inp => {
+            inp.onmidimessage = msg => {
+              $('#messages').append($('<div>').text(msg.data[0] + " " + msg.data[1] + " " + msg.data[2]));
+            };
+          });
+          setDeviceList($('#outdevices'), Array.from(access.outputs.values()), outp => {
+            outdevice = outp;
+          });
+
+          // Debug
+          $('#indevices').val(1).change();
+          $('#outdevices').val(0).change();
+        });
+      });
+    </script>
+  </head>
+  <body>
+    <b>In:</b><select id="indevices"></select>
+    <b>Out:</b><select id="outdevices"></select>
+    <pre id="messages"></pre>
+  </body>
+</html>
