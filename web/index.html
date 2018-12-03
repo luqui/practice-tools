@@ -82,14 +82,17 @@
         update();
         return {
           hit: () => {
+            if (score >= notches-1 && score < notches) {
+              sendMIDI([0x91, 56, 0x40]); // Win bell!
+              setTimeout(() => sendMIDI([0x91, 56, 0]), 30);
+              score = 0;
+            }
             score++;
-            console.log("Hit:", score);
             score = Math.min(score, notches);
             update();
           },
           miss: () => {
             score *= penalty;
-            console.log("Miss:", score);
             update();
           },
         };
@@ -128,7 +131,7 @@
 
           initializeMetronome();
 
-          skillmeter = SkillMeter($('#skillReading'), 200, 0.75);
+          skillmeter = SkillMeter($('#skillReading'), 100, 0.75);
         });
 
       });
