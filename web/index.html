@@ -15,6 +15,8 @@
     <script src="jquery-3.3.1.js"></script>
     <script src="vexflow-debug.js"></script>
     <script>
+      VF = Vex.Flow;
+
       var outdevice = null;
 
       var sendMIDI = function(data) {
@@ -64,8 +66,10 @@
         $('#metronomeStart').text('Start');
         $('#metronomeStart').off('click').click(e => {
           var note = parseInt($('#metronomeNote').val());
-          metronome = Metronome(parseInt($('#metronomeTempo').val()), beatno => {
-            sendMIDI([0x91, note, 0x50]);
+          var pattern = getActivePattern();
+          console.log(pattern);
+          metronome = Metronome(parseInt($('#metronomeTempo').val())*pattern.spacing, beatno => {
+            sendMIDI([0x91, note, pattern.velocities[beatno % pattern.velocities.length]]);
             setTimeout(() => sendMIDI([0x91, note, 0], 30));
           });
           $('#metronomeStart').text('Stop');
@@ -100,15 +104,78 @@
 
       var skillmeter = null;
 
+
+      var metronomePatterns = [
+        {
+          notation: (cx, stave) => {
+            VF.Formatter.FormatAndDraw(cx, stave, [new VF.StaveNote({ clef: "treble", keys: ["c/4"], duration: "q" })]);
+          },
+          spacing: 1,  // notes per beat
+          velocities: [ 64 ]
+        },
+        {
+          notation: (cx,stave) => {
+            var voice = new VF.Voice({num_beats: 1, beat_value: 4});
+            var notes = [ new VF.StaveNote({ clef: "treble", keys: ["c/4"], duration: "16" })
+                        , new VF.StaveNote({ clef: "treble", keys: ["c/4"], duration: "16" })
+                        , new VF.StaveNote({ clef: "treble", keys: ["c/4"], duration: "16" })
+                        , new VF.StaveNote({ clef: "treble", keys: ["c/4"], duration: "16" })
+                        ];
+            voice.addTickables(notes);
+            (new VF.Formatter()).joinVoices([voice]).formatToStave([voice], stave);
+            var beam = new VF.Beam(notes);
+            voice.draw(cx, stave);
+            beam.setContext(cx).draw();
+          },
+          spacing: 4,
+          velocities: [ 80, 44, 44, 44, ]
+        }
+      ];
+
+      var activePattern = null;
+      var getActivePattern = function() {
+        return activePattern = metronomePatterns[$('#metronomePatterns :checked').val()];
+      };
+
+      var renderPatterns = function(container) {
+        var first = true;
+        for (var i = 0; i < metronomePatterns.length; i++) {
+          var renderDiv = $('<div>');
+          var input = $('<input>').attr('type', 'radio')
+                                  .attr('name', container.attr('id'))
+                                  .attr('value', i);
+          if (first) {
+            input.attr('checked', 'checked');
+            first = false;
+          }
+
+          $(container)
+            .append($('<li>')
+              .append(input)
+              .append(renderDiv));
+            
+
+          var renderer = new VF.Renderer(renderDiv[0], VF.Renderer.Backends.SVG);
+          renderer.resize(500, 100);
+          var cx = renderer.getContext();
+
+          var stave = new VF.Stave(0, 0, 500);
+          stave.setContext(cx).draw();
+
+          metronomePatterns[i].notation(cx, stave);
+        }
+      };
+
+
       $(() => {
         navigator.requestMIDIAccess().then(access => {
           setDeviceList($('#indevices'), Array.from(access.inputs.values()), inp => {
             inp.onmidimessage = msg => {
               if (metronome && msg.data[0] == 0x90 && msg.data[2] != 0) {
-                var beats = metronome.measure();
+                var beats = metronome.measure() / activePattern.spacing;
                 var roundBeats = Math.round(4*beats)/4.0;
 
-                if (Math.abs(metronome.toMS(roundBeats - beats)) < 35) {
+                if (Math.abs(metronome.toMS(roundBeats - beats) * activePattern.spacing) < 35) {
                   sendMIDI(msg.data);
                   if (skillmeter) { skillmeter.hit(); }
                 }
@@ -130,6 +197,7 @@
           $('#outdevices').val(0).change();
 
           initializeMetronome();
+          renderPatterns($('#metronomePatterns'));
 
           skillmeter = SkillMeter($('#skillReading'), 100, 0.75);
         });
@@ -142,7 +210,8 @@
     <b>Out:</b><select id="outdevices"></select>
     <br/>
     <b>Metronome:</b> Note <input id="metronomeNote" value="42">, Tempo <input id="metronomeTempo" type="text" value="100" /><button id="metronomeStart"></button>
-    <pre id="log"></pre>
+
+    <ul id="metronomePatterns"></ul>
 
     <div id="skillMeter">
       <div id="skillReading"></div>
