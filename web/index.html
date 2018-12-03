@@ -17,12 +17,34 @@
         });
       };
 
+      var Metronome = function(bpm, callback) {
+        var interval = 1000*60.0/bpm;
+
+        var stop = false;
+
+        var start = Date.now();
+        var beatno = 0;
+        var step = () => {
+          callback(beatno);
+          beatno += 1;
+          var next = start + beatno * interval;
+          if (!stop) { setTimeout(step, next - Date.now()); }
+        };
+        step();
+
+        return {
+          stop: () => { stop = true; }
+        };
+      };
+
       $(() => {
         navigator.requestMIDIAccess().then(access => {
           console.log("midi access: ", access);
           setDeviceList($('#indevices'), Array.from(access.inputs.values()), inp => {
             inp.onmidimessage = msg => {
-              $('#messages').append($('<div>').text(msg.data[0] + " " + msg.data[1] + " " + msg.data[2]));
+              if (outdevice) {
+                outdevice.send(msg.data);
+              }
             };
           });
           setDeviceList($('#outdevices'), Array.from(access.outputs.values()), outp => {
@@ -32,13 +54,23 @@
           // Debug
           $('#indevices').val(1).change();
           $('#outdevices').val(0).change();
+
+
+          $('#metronomeStart').click(e => {
+            var note = parseInt($('#metronomeNote').val());
+            var metronome = Metronome(parseInt($('#metronomeTempo').val()), beatno => outdevice.send([0x91, note, 0x7f]));
+            $('#metronomeStart').text('Stop');
+            $('#metronomeStart').off('click').on('click', e => metronome.stop());
+          });
         });
+
       });
     </script>
   </head>
   <body>
     <b>In:</b><select id="indevices"></select>
     <b>Out:</b><select id="outdevices"></select>
-    <pre id="messages"></pre>
+    <br/>
+    <b>Metronome:</b> Note <input id="metronomeNote" value="42">, Tempo <input id="metronomeTempo" type="text" value="100" /><button id="metronomeStart">Start</button>
   </body>
 </html>
