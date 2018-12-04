@@ -1,11 +1,11 @@
 <html>
   <head>
     <style>
-    #skillMeter {
+    .progressBar {
       width: 500px;
       background-color: lightgray;
     }
-    #skillReading {
+    .progress {
       width: 1%;
       height: 30px;
       background-color: lightgreen;
@@ -267,41 +267,56 @@
       };
 
 
-      var SkillMeter = function(barElem, notches, penalty) {
+      var SkillMeter = function(interface) {
+        var targetScore = $('<input>').attr('type', 'text').val(100);
+        var penalty = $('<input>').attr('type', 'text').val(10);
+
+        var innerBar = $('<div>').addClass('progress');
+
+        var widget = $('<div>').append(
+          $('<span>').text('Target:'), targetScore,
+          $('<span>').text('Penalty:'), penalty,
+          $('<div>').addClass('progressBar').append(innerBar));
+
+
         var score = 0;
-        var update = () => $(barElem).css('width', Math.round(100.0*score/notches) + '%');
+        var update = () => innerBar.css('width', Math.round(100.0*score/targetScore.val()) + '%');
         update();
+
         return {
+          widget: widget,
           hit: () => {
-            if (score >= notches-1 && score < notches) {
-              sendMIDI([0x91, 56, 0x40]); // Win bell!
-              setTimeout(() => sendMIDI([0x91, 56, 0]), 30);
+            var target = targetScore.val();
+            if (score >= target-1 && score < target) {
+              interface.sendMIDI([0x91, 56, 0x60]); // Win bell!
+              setTimeout(() => interface.sendMIDI([0x91, 56, 0]), 30);
               score = 0;
             }
             score++;
-            score = Math.min(score, notches);
+            score = Math.min(score, target);
             update();
           },
           miss: () => {
-            score *= penalty;
+            score = Math.max(0, score-penalty.val());
             update();
           },
         };
       };
 
-      var skillmeter = null;
-
       $(() => {
         var interface = MIDIInterface();
         var scheduler = Scheduler();
         var metronome = Metronome(interface, scheduler);
-        var filter = AccuracyFilter(interface, scheduler, null);
+        var skillmeter = SkillMeter(interface);
+        var filter = AccuracyFilter(interface, scheduler, skillmeter);
+
 
         $('#container').append(
           interface.widget,
           scheduler.widget,
           metronome.widget,
-          filter.widget);
+          filter.widget,
+          skillmeter.widget);
       });
     </script>
   </head>
