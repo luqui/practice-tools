@@ -65,9 +65,11 @@ $$.Scheduler = function() {
   var widget = $('<div>').append($('<span>').text('Tempo: '), tempoBox, startButton);
 
   var started = null;
+  var runcount = 0;
 
   var initButton = () => {
     started = null;
+    runcount++;
     tempoBox.prop('disabled', false);
 
     startButton.text('Start');
@@ -76,6 +78,7 @@ $$.Scheduler = function() {
       startButton.text('Stop');
       startButton.off('click').on('click', initButton);
       started = Date.now();
+      runcount++;
 
       var runcbs = startcbs;
       startcbs = [];
@@ -97,8 +100,11 @@ $$.Scheduler = function() {
     now: now,
     schedule: (beats, cb) => {
       if (started) {
+        // check/runcount is to make sure we abandon all scheduled events,
+        // even if stop/run is pressed very quickly
+        var check = runcount;
         var target = started + beats / tempo() * 60000.0;
-        setTimeout(cb, target - Date.now());
+        setTimeout(() => { if (runcount == check) { cb() } }, target - Date.now());
       }
     },
     tempo: tempo,
@@ -285,6 +291,72 @@ $$.SkillMeter = function(interface) {
       score = Math.max(0, score-penalty.val());
       update();
     },
+  };
+};
+
+
+$$.Recorder = function(interface, scheduler, onrecord) {
+  var enabled = $('<input>').attr('type', 'checkbox');
+  var widget = $('<div>').append(
+    $('<span>').text('Recorder enabled: '), enabled);
+
+  var transcript = [];
+  var recording = false;
+  var startpoint = 0;
+
+  interface.listen(msg => {
+    if (!enabled.prop('checked')) { return; }
+
+    var data = msg.data;
+    if (data[0] == 0xb0 && data[1] == 0x43 && data[2] >= 0x40) {
+      if (recording) {
+        // Don't disable recording immediately, so we can catch the rest
+        // of the beat.
+        scheduler.schedule(Math.ceil(scheduler.now())-0.01, () => { 
+          recording = false; 
+          if (onrecord) {
+            onrecord(transcript);
+          }
+        });
+      }
+      else {
+        startpoint = Math.ceil(scheduler.now());
+        transcript = [];
+        recording = true;
+      }
+    }
+
+    if (recording) {
+      transcript.push([ scheduler.now() - startpoint, data ]);
+    }
+  });
+
+  return {
+    widget: widget
+  };
+};
+
+$$.Looper = function(interface, scheduler) {
+  var widget = $('<div>');
+
+  var playScript = script => {
+    var startat = Math.ceil(scheduler.now());
+    for (var i = 0; i < script.length; i++) {
+      (() => { 
+        var j = i;
+        scheduler.schedule(script[j][0] + startat, () => {
+          interface.sendMIDI(script[j][1]);
+          if (j == script.length-1) {
+            playScript(script);
+          }
+        });
+      })();
+    }
+  };
+
+  return {
+    widget: widget,
+    play: playScript
   };
 };
 

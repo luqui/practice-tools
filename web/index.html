@@ -24,13 +24,16 @@
         var metronome = PT.Metronome(interface, scheduler);
         var skillmeter = PT.SkillMeter(interface);
         var filter = PT.AccuracyFilter(interface, scheduler, skillmeter);
+        var recorder = PT.Recorder(interface, scheduler, script => looper.play(script));
+        var looper = PT.Looper(interface, scheduler);
 
         $('#container').append(
           interface.widget,
           scheduler.widget,
           metronome.widget,
           filter.widget,
-          skillmeter.widget);
+          skillmeter.widget,
+          recorder.widget);
       });
     </script>
   </head>
