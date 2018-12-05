@@ -30,10 +30,12 @@
         var interface = PT.MIDIInterface();
         var scheduler = PT.Scheduler();
         var metronome = PT.Metronome(interface, scheduler);
-        var skillmeter = PT.SkillMeter(interface);
-        var filter = PT.AccuracyFilter(interface, scheduler, skillmeter);
-        var recorder = PT.Recorder(interface, scheduler, script => looper.play(script));
-        var looper = PT.Looper(interface, scheduler);
+        var filter = PT.AccuracyFilter(scheduler, interface.event);
+        var skillmeter = PT.SkillMeter(interface, filter.hitevent, filter.missevent);
+        //var recorder = PT.Recorder(interface, scheduler, script => looper.play(script));
+        //var looper = PT.Looper(interface, scheduler);
+
+        filter.hitevent.listen(msg => interface.sendMIDI(msg.data));
 
         $('#container').append(
           interface.widget,
@@ -41,7 +43,9 @@
           metronome.widget,
           filter.widget,
           skillmeter.widget,
-          recorder.widget);
+          //recorder.widget,
+          //looper.widget,
+        );
       });
     </script>
   </head>

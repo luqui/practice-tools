@@ -2,6 +2,16 @@ PracticeTools = function(VF, $) {
 
 var $$ = {};
 
+$$.Event = function() {
+  var listeners = [];
+  return {
+    listen: cb => listeners.push(cb),
+    fire: x => {
+      listeners.map(cb => cb(x));
+    }
+  };
+};
+
 $$.MIDIInterface = function() {
   var indevice = null;
   var outdevice = null;
@@ -22,6 +32,8 @@ $$.MIDIInterface = function() {
     $('<span>').text('In:'), indevs,
     $('<span>').text('Out:'), outdevs);
 
+  var inevent = $$.Event();
+
   navigator.requestMIDIAccess().then(access => {
     var inputs = Array.from(access.inputs.values());
     var outputs = Array.from(access.outputs.values());
@@ -29,7 +41,7 @@ $$.MIDIInterface = function() {
       indevice = inputs[indevs.val()];
       if (indevice) {
         indevice.onmidimessage = msg => {
-          listeners.map(cb => cb(msg))
+          inevent.fire(msg);
         };
       }
     });
@@ -42,14 +54,12 @@ $$.MIDIInterface = function() {
     outdevs.val(0).change();
   });
 
-  var listeners = [];
-
   return {
     widget: widget,
     sendMIDI: data => { 
       if (outdevice) { outdevice.send(data) } 
     },
-    listen: cb => listeners.push(cb)
+    event: inevent
   };
 };
 
@@ -219,7 +229,7 @@ $$.Metronome = function(interface, scheduler) {
 };
 
 
-$$.AccuracyFilter = function(interface, scheduler, meter) {
+$$.AccuracyFilter = function(scheduler, listen) {
   var subdivs = $('<input>').attr('type', 'text').val(4);
   var accuracy = $('<input>').attr('type', 'text').val(35);
   var enabled = $('<input>').attr('type', 'checkbox');
@@ -228,7 +238,10 @@ $$.AccuracyFilter = function(interface, scheduler, meter) {
     $('<span>').text('Accuracy (ms): '), accuracy,
     $('<span>').text('Enabled: '), enabled);
 
-  interface.listen(msg => {
+  var hitevent = $$.Event();
+  var missevent = $$.Event();
+
+  listen.listen(msg => {
     var data = msg.data;
     if (data[0] == 0x90 && data[2] != 0
         && scheduler.running() && enabled.prop('checked')) {
@@ -236,29 +249,26 @@ $$.AccuracyFilter = function(interface, scheduler, meter) {
       var now = scheduler.now();
       var target = Math.round(scheduler.now()*divs)/divs;
       if (60000.0*Math.abs(target-now)/scheduler.tempo() <= accuracy.val()) {
-        interface.sendMIDI(data);
-        if (meter) {
-          meter.hit();
-        }
+        hitevent.fire(msg);
       }
       else {
-        if (meter) {
-          meter.miss();
-        }
+        missevent.fire(msg);
       }
     }
     else {
-      interface.sendMIDI(data);
+      hitevent.fire(msg);
     }
   });
 
   return {
-    widget: widget
+    widget: widget,
+    hitevent: hitevent,
+    missevent: missevent
   }
 };
 
 
-$$.SkillMeter = function(interface) {
+$$.SkillMeter = function(interface, hitevent, missevent) {
   var targetScore = $('<input>').attr('type', 'text').val(100);
   var penalty = $('<input>').attr('type', 'text').val(10);
 
@@ -274,23 +284,25 @@ $$.SkillMeter = function(interface) {
   var update = () => innerBar.css('width', Math.round(100.0*score/targetScore.val()) + '%');
   update();
 
+  hitevent.listen(() => {
+    var target = targetScore.val();
+    if (score >= target-1 && score < target) {
+      interface.sendMIDI([0x91, 56, 0x60]); // Win bell!
+      setTimeout(() => interface.sendMIDI([0x91, 56, 0]), 30);
+      score = 0;
+    }
+    score++;
+    score = Math.min(score, target);
+    update();
+  });
+
+  missevent.listen(() => {
+    score = Math.max(0, score-penalty.val());
+    update();
+  });
+
   return {
-    widget: widget,
-    hit: () => {
-      var target = targetScore.val();
-      if (score >= target-1 && score < target) {
-        interface.sendMIDI([0x91, 56, 0x60]); // Win bell!
-        setTimeout(() => interface.sendMIDI([0x91, 56, 0]), 30);
-        score = 0;
-      }
-      score++;
-      score = Math.min(score, target);
-      update();
-    },
-    miss: () => {
-      score = Math.max(0, score-penalty.val());
-      update();
-    },
+    widget: widget
   };
 };
 
