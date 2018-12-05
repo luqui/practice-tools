@@ -296,16 +296,17 @@ $$.SkillMeter = function(interface) {
 
 
 $$.Recorder = function(interface, scheduler, onrecord) {
-  var enabled = $('<input>').attr('type', 'checkbox');
-  var widget = $('<div>').append(
-    $('<span>').text('Recorder enabled: '), enabled);
+  var recorderLight = $('<div>').addClass('recorderLight');
+  var widget = $('<div>').append(recorderLight);
 
   var transcript = [];
   var recording = false;
   var startpoint = 0;
 
   interface.listen(msg => {
-    if (!enabled.prop('checked')) { return; }
+    if (!scheduler.running()) {
+      return;
+    }
 
     var data = msg.data;
     if (data[0] == 0xb0 && data[1] == 0x43 && data[2] >= 0x40) {
@@ -314,6 +315,7 @@ $$.Recorder = function(interface, scheduler, onrecord) {
         // of the beat.
         scheduler.schedule(Math.ceil(scheduler.now())-0.01, () => { 
           recording = false; 
+          recorderLight.removeClass('recording');
           if (onrecord) {
             onrecord(transcript);
           }
@@ -323,6 +325,7 @@ $$.Recorder = function(interface, scheduler, onrecord) {
         startpoint = Math.ceil(scheduler.now());
         transcript = [];
         recording = true;
+        recorderLight.addClass('recording');
       }
     }
 
