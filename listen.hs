@@ -22,7 +22,12 @@ getConn = do
 main :: IO ()
 main = do
     conns <- getConn
-    forever $ gameRound conns >> threadDelay 1000000
+    singleChordGame conns (chord 1 (Rand.uniform [48..60])) 10
+    singleChordGame conns (chord 1 (Rand.uniform [48..72])) 10
+    singleChordGame conns (chord 2 (Rand.uniform [48..60])) 10
+    singleChordGame conns (chord 2 (Rand.uniform [48..72])) 10
+    singleChordGame conns (chord 3 (Rand.uniform [48..60])) 10
+    singleChordGame conns (chord 3 (Rand.uniform [48..72])) 10
 
 filterCloud :: (a -> Bool) -> Cloud a -> Cloud a
 filterCloud p c = do
@@ -38,24 +43,34 @@ chord n notecloud = do
     (note :) <$> chord (n-1) (filterCloud (/= note) notecloud)
         
 
-gameRound :: Connections -> IO ()
-gameRound (src, dest) = do
-    notes <- Rand.evalRandIO (chord 2 (Rand.uniform [48..60]))
+singleChordRound :: Connections -> Cloud [Int] -> IO Bool
+singleChordRound (src,dest) notecloud = do
+    notes <- Rand.evalRandIO notecloud
 
     let playNotes = do
             forM_ notes $ \note -> MIDI.send dest $ MIDI.MidiMessage 1 (MIDI.NoteOn note 64)
             threadDelay 1000000
             forM_ notes $ \note -> MIDI.send dest $ MIDI.MidiMessage 1 (MIDI.NoteOn note 0)
 
-    let listenSuccess = do
+    let listenSuccess win = do
             ch <- listenChord (src,dest)
-            if | Set.fromList notes == ch -> putStrLn "Yes!"
-               | ch == Set.singleton 108 -> playNotes >> listenSuccess
-               | otherwise -> putStrLn "Nope" >> listenSuccess
+            if | Set.fromList notes == ch -> pure win
+               | ch == Set.singleton 108 -> playNotes >> listenSuccess win
+               | otherwise -> listenSuccess False
 
     playNotes
-    listenSuccess
-    
+    listenSuccess True
+
+singleChordGame :: Connections -> Cloud [Int] -> Int -> IO ()
+singleChordGame conns chord scoregoal = go 0
+    where
+    go score | score >= scoregoal = putStrLn "You won the game!"
+             | otherwise = do
+                putStrLn $ "Score: " ++ show score ++ " / " ++ show scoregoal
+                winround <- singleChordRound conns chord
+                if winround
+                    then go (score+1)
+                    else go (max 0 (score-1))
 
 listenChord :: Connections -> IO (Set.Set Int)
 listenChord (src, dest) = listenOn Set.empty
