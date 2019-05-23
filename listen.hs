@@ -1,9 +1,11 @@
 {-# LANGUAGE MultiWayIf #-}
 
+import Prelude hiding (seq)
 import qualified System.MIDI as MIDI
+import Data.List (isPrefixOf, tails)
 import qualified Data.Set as Set
 import Control.Concurrent (threadDelay)
-import Control.Monad (filterM, forever)
+import Control.Monad (filterM, forever, replicateM, join, when)
 import Control.Monad.Random as Rand
 import System.IO (hFlush, stdout)
 
@@ -19,15 +21,53 @@ getConn = do
     MIDI.start srcconn
     pure (srcconn,destconn)
 
+getExercise :: Int -> Cloud [[Int]]
+getExercise score = join $ Rand.weighted [ (cloud, 1 / fromIntegral (abs (score-level) + 1)) | (level, cloud) <- exercises, score >= level]
+    where
+    exercises :: [(Int, Cloud [[Int]])]
+    exercises = zip [0,5..]
+        [ seq 1   $ chord 1 (Rand.uniform range)
+        , seq 2   $ seq 1 $ Rand.uniform range
+        , noteSequence 2 (Rand.uniform range) (Rand.uniform [-2,-1,1,2])
+        , seq 1   $ chord 2 $ Rand.uniform range
+        , noteSequence 4 (Rand.uniform range) (Rand.uniform [-3,-2,-1,1,2,3])
+        , seq 1   $ chord 2 $ Rand.uniform range
+        , noteSequence 3 (Rand.uniform range) (Rand.uniform [-4,-3,-2,-1,1,2,3,4])
+        , seq 1 $ byIntervals 3 (Rand.uniform range) (Rand.uniform [3,4])
+        , seq 1 $ byIntervals 3 (Rand.uniform range) (Rand.uniform [3,4,5])
+        , noteSequence 4 (Rand.uniform range) (Rand.uniform [-4,-3,-2,-1,1,2,3,4])
+        , seq 1 $ byIntervals 3 (Rand.uniform range) (Rand.uniform [2,3,4,5])
+        , seq 1 $ byIntervals 3 (Rand.uniform range) (Rand.uniform [2,3,4,5,7])
+        , noteSequence 4 (Rand.uniform range) (Rand.uniform [-5,-4,-3,-2,-1,1,2,3,4,5])
+        , seq 1 $ byIntervals 3 (Rand.uniform range) (Rand.uniform [2,3,4,5,6,7])
+        , seq 1 $ byIntervals 3 (Rand.uniform range) (Rand.uniform [2,3,4,5,6,7,8,9])
+        , seq 1 $ byIntervals 3 (Rand.uniform range) (Rand.uniform [1,2,3,4,5,6,7,8,9])
+        , noteSequence 5 (Rand.uniform range) (Rand.uniform [-5,-4,-3,-2,-1,1,2,3,4,5])
+        , noteSequence 5 (Rand.uniform range) (Rand.uniform [-6,-5,-4,-3,-2,-1,1,2,3,4,5,6])
+        , noteSequence 6 (Rand.uniform range) (Rand.uniform [-6,-5,-4,-3,-2,-1,1,2,3,4,5,6])
+        , noteSequence 6 (Rand.uniform range) (Rand.uniform [-7,-6,-5,-4,-3,-2,-1,1,2,3,4,5,6,7])
+        , noteSequence 7 (Rand.uniform range) (Rand.uniform [-7,-6,-5,-4,-3,-2,-1,1,2,3,4,5,6,7])
+        , noteSequence 7 (Rand.uniform range) (Rand.uniform [-8,-7,-6,-5,-4,-3,-2,-1,1,2,3,4,5,6,7,8])
+        , noteSequence 8 (Rand.uniform range) (Rand.uniform [-8,-7,-6,-5,-4,-3,-2,-1,1,2,3,4,5,6,7,8])
+        
+        ]
+
+    infix 0 -->
+    (-->) = (,)
+
+    seq = replicateM
+
+    range = [55..67]
+
+noteSequence :: Int -> Cloud Int -> Cloud Int -> Cloud [[Int]]
+noteSequence size baseNote intervals = map (:[]) <$> byIntervals size baseNote intervals
+
+
 main :: IO ()
 main = do
     conns <- getConn
-    singleChordGame conns (chord 1 (Rand.uniform [48..60])) 10
-    singleChordGame conns (chord 1 (Rand.uniform [48..72])) 10
-    singleChordGame conns (chord 2 (Rand.uniform [48..60])) 10
-    singleChordGame conns (chord 2 (Rand.uniform [48..72])) 10
-    singleChordGame conns (chord 3 (Rand.uniform [48..60])) 10
-    singleChordGame conns (chord 3 (Rand.uniform [48..72])) 10
+    --chordGame conns
+    scaleGame conns
 
 filterCloud :: (a -> Bool) -> Cloud a -> Cloud a
 filterCloud p c = do
@@ -36,41 +76,66 @@ filterCloud p c = do
         then pure x
         else filterCloud p c
 
+scale :: Int -> Cloud [Int]
+scale baseNote = Rand.uniform . concatMap (\s -> [s, map (subtract 12) (reverse s)]) . map (scanl (+) baseNote) . concat $ 
+                    [ take 7 . map (take 7) . tails . cycle $ major, take 7 . map (take 7) . tails . cycle $ melodic ]
+    where
+    major = [2,2,1,2,2,2,1]
+    melodic = [2,1,2,2,2,2,1]
+
 chord :: (Eq a) => Int -> Cloud a -> Cloud [a]
 chord 0 _ = pure []
 chord n notecloud = do
     note <- notecloud
     (note :) <$> chord (n-1) (filterCloud (/= note) notecloud)
+
+
+byIntervals :: Int -> Cloud Int -> Cloud Int -> Cloud [Int]
+byIntervals notes baseNote intervals = scanl (+) <$> baseNote <*> replicateM (notes-1) intervals
         
 
-singleChordRound :: Connections -> Cloud [Int] -> IO Bool
-singleChordRound (src,dest) notecloud = do
-    notes <- Rand.evalRandIO notecloud
+sequenceRound :: Connections -> [[Int]] -> IO Bool
+sequenceRound (src,dest) chords = do
+    let playNotes =
+            forM_ chords $ \notes -> do
+                forM_ notes $ \note -> MIDI.send dest $ MIDI.MidiMessage 1 (MIDI.NoteOn note 64)
+                threadDelay 250000
+                forM_ notes $ \note -> MIDI.send dest $ MIDI.MidiMessage 1 (MIDI.NoteOn note 0)
 
-    let playNotes = do
-            forM_ notes $ \note -> MIDI.send dest $ MIDI.MidiMessage 1 (MIDI.NoteOn note 64)
-            threadDelay 1000000
-            forM_ notes $ \note -> MIDI.send dest $ MIDI.MidiMessage 1 (MIDI.NoteOn note 0)
+    let expected = reverse $ map Set.fromList chords
 
-    let listenSuccess win = do
+    let listenSuccess history win = do
             ch <- listenChord (src,dest)
-            if | Set.fromList notes == ch -> pure win
-               | ch == Set.singleton 108 -> playNotes >> listenSuccess win
-               | otherwise -> listenSuccess False
+            if | ch == Set.singleton 108 -> playNotes >> listenSuccess history win  -- hear again
+               | expected `isPrefixOf` (ch:history) -> pure win
+               | length (ch:history) < length expected -> listenSuccess (ch:history) win
+               | otherwise -> listenSuccess (ch:history) False
 
     playNotes
-    listenSuccess True
+    listenSuccess [] True
 
-singleChordGame :: Connections -> Cloud [Int] -> Int -> IO ()
-singleChordGame conns chord scoregoal = go 0
+chordGame :: Connections -> IO ()
+chordGame conns = go 0
     where
-    go score | score >= scoregoal = putStrLn "You won the game!"
-             | otherwise = do
-                putStrLn $ "Score: " ++ show score ++ " / " ++ show scoregoal
-                winround <- singleChordRound conns chord
-                if winround
-                    then go (score+1)
-                    else go (max 0 (score-1))
+    go score = do
+        putStrLn $ "Score: " ++ show score 
+        threadDelay 500000
+        winround <- sequenceRound conns =<< Rand.evalRandIO (getExercise score)
+        if winround
+            then go (score+1)
+            else go (max 0 (score-1))
+
+scaleGame :: Connections -> IO ()
+scaleGame conns = go 60
+    where
+    go baseNote = do
+        threadDelay 500000
+        thescale <- Rand.evalRandIO $ do { s <- scale baseNote; s' <- scale (last s); pure (s <> tail s') }
+        if (last thescale >= 36 && last thescale <= 96) then do
+            void (sequenceRound conns (map (:[]) thescale))
+            go (last thescale)
+        else
+            go baseNote
 
 listenChord :: Connections -> IO (Set.Set Int)
 listenChord (src, dest) = listenOn Set.empty
