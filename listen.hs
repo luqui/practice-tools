@@ -1,12 +1,14 @@
-{-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE MultiWayIf, ScopedTypeVariables #-}
 
 import Prelude hiding (seq)
 import qualified System.MIDI as MIDI
-import Data.List (isPrefixOf, tails)
+import Data.List (isPrefixOf, tails, delete, nub, sortBy, permutations)
 import qualified Data.Set as Set
 import Control.Concurrent (threadDelay)
 import Control.Monad (filterM, forever, replicateM, join, when)
+import qualified Control.Monad.Trans.State as State
 import Control.Monad.Random as Rand
+import Data.Ord (comparing)
 import System.IO (hFlush, stdout)
 
 type Cloud = Rand.Rand Rand.StdGen
@@ -33,15 +35,15 @@ getExercise score = join $ Rand.weighted [ (cloud, 1 / fromIntegral (abs (score-
         , noteSequence 4 (Rand.uniform range) (Rand.uniform [-3,-2,-1,1,2,3])
         , seq 1   $ chord 2 $ Rand.uniform range
         , noteSequence 3 (Rand.uniform range) (Rand.uniform [-4,-3,-2,-1,1,2,3,4])
-        , seq 1 $ byIntervals 3 (Rand.uniform range) (Rand.uniform [3,4])
-        , seq 1 $ byIntervals 3 (Rand.uniform range) (Rand.uniform [3,4,5])
+        , seq 1 $ byIntervals 3 (Rand.uniform tinyrange) (Rand.uniform [3,4])
+        , seq 1 $ byIntervals 3 (Rand.uniform tinyrange) (Rand.uniform [3,4,5])
         , noteSequence 4 (Rand.uniform range) (Rand.uniform [-4,-3,-2,-1,1,2,3,4])
-        , seq 1 $ byIntervals 3 (Rand.uniform range) (Rand.uniform [2,3,4,5])
-        , seq 1 $ byIntervals 3 (Rand.uniform range) (Rand.uniform [2,3,4,5,7])
+        , seq 1 $ byIntervals 3 (Rand.uniform tinyrange) (Rand.uniform [2,3,4,5])
+        , seq 1 $ byIntervals 3 (Rand.uniform tinyrange) (Rand.uniform [2,3,4,5,7])
         , noteSequence 4 (Rand.uniform range) (Rand.uniform [-5,-4,-3,-2,-1,1,2,3,4,5])
-        , seq 1 $ byIntervals 3 (Rand.uniform range) (Rand.uniform [2,3,4,5,6,7])
-        , seq 1 $ byIntervals 3 (Rand.uniform range) (Rand.uniform [2,3,4,5,6,7,8,9])
-        , seq 1 $ byIntervals 3 (Rand.uniform range) (Rand.uniform [1,2,3,4,5,6,7,8,9])
+        , seq 1 $ byIntervals 3 (Rand.uniform tinyrange) (Rand.uniform [2,3,4,5,6,7])
+        , seq 1 $ byIntervals 3 (Rand.uniform tinyrange) (Rand.uniform [2,3,4,5,6,7,8,9])
+        , seq 1 $ byIntervals 3 (Rand.uniform tinyrange) (Rand.uniform [1,2,3,4,5,6,7,8,9])
         , noteSequence 5 (Rand.uniform range) (Rand.uniform [-5,-4,-3,-2,-1,1,2,3,4,5])
         , noteSequence 5 (Rand.uniform range) (Rand.uniform [-6,-5,-4,-3,-2,-1,1,2,3,4,5,6])
         , noteSequence 6 (Rand.uniform range) (Rand.uniform [-6,-5,-4,-3,-2,-1,1,2,3,4,5,6])
@@ -58,6 +60,31 @@ getExercise score = join $ Rand.weighted [ (cloud, 1 / fromIntegral (abs (score-
     seq = replicateM
 
     range = [55..67]
+    tinyrange = [55..59]
+
+increasingExercises :: Cloud [[[Int]]]
+increasingExercises = Rand.uniform range >>= \(n0 :: Int) -> go [n0]
+    where
+    go :: [Int] -> Cloud [[[Int]]]
+    go notes = concat <$> sequenceA [ goLine notes, goChord notes, (go . (: notes) =<< Rand.uniform (foldr delete range notes)) ]
+
+    goLine :: [Int] -> Cloud [[[Int]]]
+    goLine notes = nub . sortBy (comparing length) . deconstruct . map (:[]) <$> Rand.uniform (permutations notes)
+
+    goChord :: [Int] -> Cloud [[[Int]]]
+    goChord notes = map (:[]) . nub . sortBy (comparing length) . deconstruct <$> Rand.uniform (permutations notes)
+
+    range = [67..79]
+
+    deconstruct :: [a] -> [[a]]
+    deconstruct [] = []
+    deconstruct [x] = [[x]]
+    deconstruct xs = deconstruct pre ++ deconstruct post ++ [xs]
+        where
+        (pre,post) = (take (length xs `div` 2) xs, drop (length xs `div` 2) xs)
+
+
+
 
 noteSequence :: Int -> Cloud Int -> Cloud Int -> Cloud [[Int]]
 noteSequence size baseNote intervals = map (:[]) <$> byIntervals size baseNote intervals
@@ -66,8 +93,8 @@ noteSequence size baseNote intervals = map (:[]) <$> byIntervals size baseNote i
 main :: IO ()
 main = do
     conns <- getConn
-    --chordGame conns
-    scaleGame conns
+    chordGame conns
+    --scaleGame conns
 
 filterCloud :: (a -> Bool) -> Cloud a -> Cloud a
 filterCloud p c = do
@@ -115,15 +142,15 @@ sequenceRound (src,dest) chords = do
     listenSuccess [] True
 
 chordGame :: Connections -> IO ()
-chordGame conns = go 0
+chordGame conns = go 0 =<< Rand.evalRandIO increasingExercises
     where
-    go score = do
+    go score exes = do
         putStrLn $ "Score: " ++ show score 
         threadDelay 500000
-        winround <- sequenceRound conns =<< Rand.evalRandIO (getExercise score)
+        winround <- sequenceRound conns (exes !! score)
         if winround
-            then go (score+1)
-            else go (max 0 (score-1))
+            then go (score+1) exes
+            else go (max 0 (score-5)) exes
 
 scaleGame :: Connections -> IO ()
 scaleGame conns = go 60
@@ -166,7 +193,9 @@ listenChord (src, dest) = listenOn Set.empty
 getNextEvent :: Connections -> IO (Maybe (MIDI.MidiEvent))
 getNextEvent (src, dest) = do
     e <- MIDI.getNextEvent src
+    {-
     case e of
         Just (MIDI.MidiEvent ts msg) -> MIDI.send dest msg
         _ -> pure ()
+    -}
     pure e
