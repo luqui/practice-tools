@@ -62,24 +62,39 @@ getExercise score = join $ Rand.weighted [ (cloud, 1 / fromIntegral (abs (score-
     range = [55..67]
     tinyrange = [55..59]
 
+combinations :: Int -> [a] -> [[a]]
+combinations 0 _ = [[]]
+combinations n [] = []  -- *at most* n
+combinations n (x:xs) = map (x:) (combinations (n-1) xs) ++ combinations n xs
+
+shuffle :: [a] -> Cloud [a]
+shuffle [] = pure []
+shuffle xs = do
+    n <- Rand.uniform (zipWith const [0..] xs)
+    ((xs !! n) :) <$> shuffle (take n xs ++ drop (n+1) xs)
+
+choose :: Int -> [a] -> Cloud [a]
+choose n xs = take n <$> shuffle xs
+
 increasingExercises :: Cloud [[[Int]]]
 increasingExercises = Rand.uniform range >>= \(n0 :: Int) -> go [n0]
     where
     go :: [Int] -> Cloud [[[Int]]]
-    go notes = concat <$> sequenceA [ goLine notes, goChord notes, (go . (: notes) =<< Rand.uniform (foldr delete range notes)) ]
+    go notes = concat <$> sequenceA [ pure [[[head notes]]], goLine notes, goChord notes, (go . (: notes) =<< Rand.uniform (foldr delete range notes)) ]
 
     goLine :: [Int] -> Cloud [[[Int]]]
-    goLine notes = nub . sortBy (comparing length) . deconstruct . map (:[]) <$> Rand.uniform (permutations notes)
+    goLine notes = nub . sortBy (comparing length) . deconstruct 3 . map (:[]) <$> shuffle notes
 
     goChord :: [Int] -> Cloud [[[Int]]]
-    goChord notes = map (:[]) . nub . sortBy (comparing length) . deconstruct <$> Rand.uniform (permutations notes)
+    goChord notes = fmap (nub . concatMap (map (:[]) . sortBy (comparing length) . filter (not . null) . deconstruct 2)) . choose 4 =<< combinations 4 <$> shuffle notes
+            
 
-    range = [67..79]
+    range = [55..67]
 
-    deconstruct :: [a] -> [[a]]
-    deconstruct [] = []
-    deconstruct [x] = [[x]]
-    deconstruct xs = deconstruct pre ++ deconstruct post ++ [xs]
+    deconstruct :: Int -> [a] -> [[a]]
+    deconstruct lmin xs
+        | length xs <= lmin = [xs]
+        | otherwise = deconstruct lmin pre ++ deconstruct lmin post ++ [xs]
         where
         (pre,post) = (take (length xs `div` 2) xs, drop (length xs `div` 2) xs)
 
@@ -147,6 +162,7 @@ chordGame conns = go 0 =<< Rand.evalRandIO increasingExercises
     go score exes = do
         putStrLn $ "Score: " ++ show score 
         threadDelay 500000
+        print (exes !! score)
         winround <- sequenceRound conns (exes !! score)
         if winround
             then go (score+1) exes
