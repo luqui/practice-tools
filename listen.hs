@@ -3,7 +3,9 @@
 import Prelude hiding (seq)
 import qualified System.MIDI as MIDI
 import Data.List (isPrefixOf, tails, delete, nub, sortBy, permutations)
+import Data.Tuple (swap)
 import qualified Data.Set as Set
+import qualified Data.Map as Map
 import Control.Concurrent (threadDelay)
 import Control.Monad (filterM, forever, replicateM, join, when)
 import qualified Control.Monad.Trans.State as State
@@ -64,7 +66,7 @@ getExercise score = join $ Rand.weighted [ (cloud, 1 / fromIntegral (abs (score-
 
 combinations :: Int -> [a] -> [[a]]
 combinations 0 _ = [[]]
-combinations n [] = []  -- *at most* n
+combinations n [] = []
 combinations n (x:xs) = map (x:) (combinations (n-1) xs) ++ combinations n xs
 
 shuffle :: [a] -> Cloud [a]
@@ -86,7 +88,7 @@ increasingExercises = Rand.uniform range >>= \(n0 :: Int) -> go [n0]
     goLine notes = nub . sortBy (comparing length) . deconstruct 3 . map (:[]) <$> shuffle notes
 
     goChord :: [Int] -> Cloud [[[Int]]]
-    goChord notes = fmap (nub . concatMap (map (:[]) . sortBy (comparing length) . filter (not . null) . deconstruct 2)) . choose 4 =<< combinations 4 <$> shuffle notes
+    goChord notes = map (:[]) <$> choose 4 (combinations 3 notes)
             
 
     range = [55..67]
@@ -157,16 +159,21 @@ sequenceRound (src,dest) chords = do
     listenSuccess [] True
 
 chordGame :: Connections -> IO ()
-chordGame conns = go 0 =<< Rand.evalRandIO increasingExercises
+chordGame conns = go 0 Map.empty =<< Rand.evalRandIO increasingExercises
     where
-    go score exes = do
-        putStrLn $ "Score: " ++ show score 
+    go :: Int -> Map.Map [[Int]] Int -> [[[Int]]] -> IO ()
+    go score missed exes = do
+        putStrLn $ "Score: " ++ show score ++ " | Debt: " ++ show (sum missed)
         threadDelay 500000
-        print (exes !! score)
-        winround <- sequenceRound conns (exes !! score)
-        if winround
-            then go (score+1) exes
-            else go (max 0 (score-5)) exes
+
+        (round,adv) <- Rand.evalRandIO . Rand.weighted $ ((exes !! score, True), 5) : [ ((ex, False), fromIntegral w) | (ex,w) <- Map.assocs missed, w > 0 ]
+        winround <- sequenceRound conns round
+        if | winround  -> go (if adv then score+1 else score) (Map.alter (addDebt (-1)) round missed) exes
+           | otherwise -> go score (Map.alter (addDebt 2) round missed) exes
+    
+    addDebt x Nothing | x > 0 = Just x
+    addDebt x (Just y) | x + y > 0 = Just (x+y)
+    addDebt _ _ = Nothing
 
 scaleGame :: Connections -> IO ()
 scaleGame conns = go 60
