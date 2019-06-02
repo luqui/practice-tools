@@ -71,8 +71,8 @@ noteSequence size baseNote intervals = map (:[]) <$> byIntervals size baseNote i
 main :: IO ()
 main = do
     conns <- getConn
-    rowGame conns
-    --scaleGame conns
+    --rowGame conns
+    scaleGame conns
     --chordGame conns
 
 filterCloud :: (a -> Bool) -> Cloud a -> Cloud a
@@ -127,8 +127,8 @@ data ScoreStats = ScoreStats
     , ssLives :: Int
     }
 
-rowGame :: Connections -> IO ()
-rowGame conns = go (ScoreStats 0 0 Map.empty 4) =<< Rand.evalRandIO increasingExercises
+scoredGame :: Connections -> [[[Int]]] -> IO ()
+scoredGame conns = go (ScoreStats 0 0 Map.empty 4)
     where
     go :: ScoreStats -> [[[Int]]] -> IO ()
     go score exes 
@@ -157,20 +157,27 @@ rowGame conns = go (ScoreStats 0 0 Map.empty 4) =<< Rand.evalRandIO increasingEx
     addDebt x (Just y) | x + y > 0 = Just (x+y)
     addDebt _ _ = Nothing
 
+rowGame :: Connections -> IO ()
+rowGame conns = scoredGame conns =<< Rand.evalRandIO increasingExercises
+
 scaleGame :: Connections -> IO ()
-scaleGame conns = go 60
+scaleGame conns = scoredGame conns =<< Rand.evalRandIO (mapM pickScale [60..])
     where
-    go baseNote = do
-        threadDelay 500000
-        thescale <- Rand.evalRandIO $ do { s <- scale baseNote; s' <- scale (last s); pure (s <> tail s') }
-        if (last thescale >= 36 && last thescale <= 96) then do
-            void (sequenceRound conns (map (:[]) thescale))
-            go (last thescale)
-        else
-            go baseNote
+    pickScale baseNote = do 
+        s <- scale baseNote
+        s' <- scale (last s)
+        pure $ map (:[]) (s <> tail s') 
+
+intervalGame :: Connections -> IO ()
+intervalGame conns = scoredGame conns =<< Rand.evalRandIO (mapM pickPair (concatMap (replicate 3) [50..]))
+    where
+    pickPair range0 = do
+        bass <- Rand.uniform [36..48]
+        topnote <- Rand.uniform [range0..range0+12]
+        pure [[bass, topnote]]
 
 chordGame :: Connections -> IO ()
-chordGame conns = mapM_ (\n -> void (sequenceRound conns =<< Rand.evalRandIO (pickPair n)) >> threadDelay 500000) (concatMap (replicate 3) [50..])
+chordGame conns = scoredGame conns =<< Rand.evalRandIO (mapM pickChord (concatMap (replicate 3) [50..]))
     where
     pickChord range0 = do
         basenote <- Rand.uniform [0..11]
@@ -194,10 +201,6 @@ chordGame conns = mapM_ (\n -> void (sequenceRound conns =<< Rand.evalRandIO (pi
         let normalize n = (n `mod` 12) + range0
         pure [map (normalize . (+ basenote)) quality]
 
-    pickPair range0 = do
-        bass <- Rand.uniform [36..48]
-        topnote <- Rand.uniform [range0..range0+12]
-        pure [[bass, topnote]]
 
 listenChord :: Connections -> IO (Set.Set Int)
 listenChord (src, dest) = listenOn Set.empty
