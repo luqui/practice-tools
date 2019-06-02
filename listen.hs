@@ -25,45 +25,6 @@ getConn = do
     MIDI.start srcconn
     pure (srcconn,destconn)
 
-getExercise :: Int -> Cloud [[Int]]
-getExercise score = join $ Rand.weighted [ (cloud, 1 / fromIntegral (abs (score-level) + 1)) | (level, cloud) <- exercises, score >= level]
-    where
-    exercises :: [(Int, Cloud [[Int]])]
-    exercises = zip [0,5..]
-        [ seq 1   $ chord 1 (Rand.uniform range)
-        , seq 2   $ seq 1 $ Rand.uniform range
-        , noteSequence 2 (Rand.uniform range) (Rand.uniform [-2,-1,1,2])
-        , seq 1   $ chord 2 $ Rand.uniform range
-        , noteSequence 4 (Rand.uniform range) (Rand.uniform [-3,-2,-1,1,2,3])
-        , seq 1   $ chord 2 $ Rand.uniform range
-        , noteSequence 3 (Rand.uniform range) (Rand.uniform [-4,-3,-2,-1,1,2,3,4])
-        , seq 1 $ byIntervals 3 (Rand.uniform tinyrange) (Rand.uniform [3,4])
-        , seq 1 $ byIntervals 3 (Rand.uniform tinyrange) (Rand.uniform [3,4,5])
-        , noteSequence 4 (Rand.uniform range) (Rand.uniform [-4,-3,-2,-1,1,2,3,4])
-        , seq 1 $ byIntervals 3 (Rand.uniform tinyrange) (Rand.uniform [2,3,4,5])
-        , seq 1 $ byIntervals 3 (Rand.uniform tinyrange) (Rand.uniform [2,3,4,5,7])
-        , noteSequence 4 (Rand.uniform range) (Rand.uniform [-5,-4,-3,-2,-1,1,2,3,4,5])
-        , seq 1 $ byIntervals 3 (Rand.uniform tinyrange) (Rand.uniform [2,3,4,5,6,7])
-        , seq 1 $ byIntervals 3 (Rand.uniform tinyrange) (Rand.uniform [2,3,4,5,6,7,8,9])
-        , seq 1 $ byIntervals 3 (Rand.uniform tinyrange) (Rand.uniform [1,2,3,4,5,6,7,8,9])
-        , noteSequence 5 (Rand.uniform range) (Rand.uniform [-5,-4,-3,-2,-1,1,2,3,4,5])
-        , noteSequence 5 (Rand.uniform range) (Rand.uniform [-6,-5,-4,-3,-2,-1,1,2,3,4,5,6])
-        , noteSequence 6 (Rand.uniform range) (Rand.uniform [-6,-5,-4,-3,-2,-1,1,2,3,4,5,6])
-        , noteSequence 6 (Rand.uniform range) (Rand.uniform [-7,-6,-5,-4,-3,-2,-1,1,2,3,4,5,6,7])
-        , noteSequence 7 (Rand.uniform range) (Rand.uniform [-7,-6,-5,-4,-3,-2,-1,1,2,3,4,5,6,7])
-        , noteSequence 7 (Rand.uniform range) (Rand.uniform [-8,-7,-6,-5,-4,-3,-2,-1,1,2,3,4,5,6,7,8])
-        , noteSequence 8 (Rand.uniform range) (Rand.uniform [-8,-7,-6,-5,-4,-3,-2,-1,1,2,3,4,5,6,7,8])
-        
-        ]
-
-    infix 0 -->
-    (-->) = (,)
-
-    seq = replicateM
-
-    range = [55..67]
-    tinyrange = [55..59]
-
 combinations :: Int -> [a] -> [[a]]
 combinations 0 _ = [[]]
 combinations n [] = []
@@ -110,8 +71,9 @@ noteSequence size baseNote intervals = map (:[]) <$> byIntervals size baseNote i
 main :: IO ()
 main = do
     conns <- getConn
-    chordGame conns
+    rowGame conns
     --scaleGame conns
+    --chordGame conns
 
 filterCloud :: (a -> Bool) -> Cloud a -> Cloud a
 filterCloud p c = do
@@ -150,7 +112,7 @@ sequenceRound (src,dest) chords = do
 
     let listenSuccess history win = do
             ch <- listenChord (src,dest)
-            if | ch == Set.singleton 108 -> playNotes >> listenSuccess history win  -- hear again
+            if | ch == Set.singleton 108 -> playNotes >> listenSuccess [] (null history)  -- hear again, valid unless you have already started the answer
                | expected `isPrefixOf` (ch:history) -> pure win
                | length (ch:history) < length expected -> listenSuccess (ch:history) win
                | otherwise -> listenSuccess (ch:history) False
@@ -158,18 +120,38 @@ sequenceRound (src,dest) chords = do
     playNotes
     listenSuccess [] True
 
-chordGame :: Connections -> IO ()
-chordGame conns = go 0 Map.empty =<< Rand.evalRandIO increasingExercises
+data ScoreStats = ScoreStats
+    { ssScore :: Int
+    , ssRunLength :: Int
+    , ssDebt :: Map.Map [[Int]] Int
+    , ssLives :: Int
+    }
+
+rowGame :: Connections -> IO ()
+rowGame conns = go (ScoreStats 0 0 Map.empty 4) =<< Rand.evalRandIO increasingExercises
     where
-    go :: Int -> Map.Map [[Int]] Int -> [[[Int]]] -> IO ()
-    go score missed exes = do
-        putStrLn $ "Score: " ++ show score ++ " | Debt: " ++ show (sum missed)
+    go :: ScoreStats -> [[[Int]]] -> IO ()
+    go score exes 
+      | ssLives score == 0 = putStrLn "Game Over"
+      | otherwise = do
+        putStrLn $ "Level: " ++ show (ssScore score) 
+              ++ " | Debt: " ++ show (sum (ssDebt score))
+              ++ " | Run:  " ++ show (ssRunLength score)
+              ++ " | Lives: " ++ show (ssLives score)
         threadDelay 500000
 
-        (round,adv) <- Rand.evalRandIO . Rand.weighted $ ((exes !! score, True), 5) : [ ((ex, False), fromIntegral w) | (ex,w) <- Map.assocs missed, w > 0 ]
+        (round,adv) <- Rand.evalRandIO . Rand.weighted $ ((exes !! ssScore score, True), 5) : [ ((ex, False), fromIntegral w) | (ex,w) <- Map.assocs (ssDebt score), w > 0 ]
         winround <- sequenceRound conns round
-        if | winround  -> go (if adv then score+1 else score) (Map.alter (addDebt (-1)) round missed) exes
-           | otherwise -> go score (Map.alter (addDebt 2) round missed) exes
+        let score' = ScoreStats
+                       { ssScore = if winround && adv then ssScore score + 1 else ssScore score
+                       , ssRunLength = if winround then ssRunLength score + 1 else 0
+                       , ssDebt = if winround then Map.alter (addDebt (-1)) round (ssDebt score)
+                                              else Map.alter (addDebt 2) round (ssDebt score)
+                       , ssLives = if | winround && (ssRunLength score `mod` 10) == 9 -> ssLives score + 1
+                                      | winround -> ssLives score
+                                      | otherwise -> ssLives score - 1
+                        }
+        go score' exes
     
     addDebt x Nothing | x > 0 = Just x
     addDebt x (Just y) | x + y > 0 = Just (x+y)
@@ -186,6 +168,36 @@ scaleGame conns = go 60
             go (last thescale)
         else
             go baseNote
+
+chordGame :: Connections -> IO ()
+chordGame conns = mapM_ (\n -> void (sequenceRound conns =<< Rand.evalRandIO (pickPair n)) >> threadDelay 500000) (concatMap (replicate 3) [50..])
+    where
+    pickChord range0 = do
+        basenote <- Rand.uniform [0..11]
+        quality <- Rand.uniform
+            [ [ 0, 4, 7 ]  -- maj
+            , [ 0, 3, 7 ]  -- min
+            , [ 0, 3, 6 ]  -- dim
+            , [ 0, 4, 8 ]  -- aug
+            , [ 0, 4, 7, 11 ]  -- maj7
+            , [ 0, 4, 7, 10 ]  -- 7
+            --, [ 0, 4, 6, 11 ]  -- maj7 b5
+            --, [ 0, 4, 6, 10 ]  -- 7 b5
+            , [ 0, 3, 7, 11 ]  -- maj min
+            , [ 0, 3, 7, 11 ]  -- maj min b5
+            , [ 0, 3, 7, 10 ]  -- min 7
+            --, [ 0, 3, 6, 10 ]  -- min 7 b5
+            , [ 0, 3, 6, 9  ]  -- dim7
+            --, [ 0, 4, 8, 11 ]  -- maj7 #5
+            --, [ 0, 4, 8, 10 ]  -- +7
+            ]
+        let normalize n = (n `mod` 12) + range0
+        pure [map (normalize . (+ basenote)) quality]
+
+    pickPair range0 = do
+        bass <- Rand.uniform [36..48]
+        topnote <- Rand.uniform [range0..range0+12]
+        pure [[bass, topnote]]
 
 listenChord :: Connections -> IO (Set.Set Int)
 listenChord (src, dest) = listenOn Set.empty
