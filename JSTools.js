@@ -1,4 +1,4 @@
-PracticeTools = function($) {
+JSTools = function($) {
 
 var $$ = {};
 
