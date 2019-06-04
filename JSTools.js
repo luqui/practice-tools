@@ -63,4 +63,6 @@ $$.MIDIInterface = function() {
   };
 };
 
+return $$;
+
 };
