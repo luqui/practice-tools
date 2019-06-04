@@ -7,9 +7,9 @@ import Data.Tuple (swap)
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import Control.Concurrent (threadDelay)
-import Control.Monad (filterM, forever, replicateM, join, when)
+import Control.Monad (filterM, forever, replicateM, join, when, forM_)
 import qualified Control.Monad.Trans.State as State
-import Control.Monad.Random as Rand
+import qualified Control.Monad.Random as Rand
 import Data.Ord (comparing)
 import System.IO (hFlush, stdout)
 
@@ -67,13 +67,26 @@ increasingExercises = Rand.uniform range >>= \(n0 :: Int) -> go [n0]
 noteSequence :: Int -> Cloud Int -> Cloud Int -> Cloud [[Int]]
 noteSequence size baseNote intervals = map (:[]) <$> byIntervals size baseNote intervals
 
+fanCloud :: Cloud a -> Cloud a
+fanCloud m = Rand.evalRand m <$> Rand.getSplit
 
 main :: IO ()
 main = do
     conns <- getConn
-    --rowGame conns
-    scaleGame conns
-    --chordGame conns
+    scoredGame conns =<< Rand.evalRandIO (chunkerleave 10 <$> sequenceA (map fanCloud [rowGame, chordGame, intervalGame]))
+
+interleave :: [[a]] -> Cloud [a]
+interleave [] = pure []
+interleave xss = do
+    n <- Rand.uniform $ zipWith const [0..] xss
+    case xss !! n of
+        [] -> interleave (take n xss ++ drop (n+1) xss)
+        (x:xs) -> (x:) <$> interleave (take n xss ++ [xs] ++ drop (n+1) xss)
+
+chunkerleave :: Int -> [[a]] -> [a]
+chunkerleave _ [] = []
+chunkerleave n ([]:xss) = chunkerleave n xss
+chunkerleave n (xs:xss) = take n xs ++ chunkerleave n (xss ++ [drop n xs])
 
 filterCloud :: (a -> Bool) -> Cloud a -> Cloud a
 filterCloud p c = do
@@ -157,27 +170,27 @@ scoredGame conns = go (ScoreStats 0 0 Map.empty 4)
     addDebt x (Just y) | x + y > 0 = Just (x+y)
     addDebt _ _ = Nothing
 
-rowGame :: Connections -> IO ()
-rowGame conns = scoredGame conns =<< Rand.evalRandIO increasingExercises
+rowGame :: Cloud [[[Int]]]
+rowGame = increasingExercises
 
-scaleGame :: Connections -> IO ()
-scaleGame conns = scoredGame conns =<< Rand.evalRandIO (mapM pickScale [60..])
+scaleGame :: Cloud [[[Int]]]
+scaleGame = mapM pickScale [60..]
     where
     pickScale baseNote = do 
         s <- scale baseNote
         s' <- scale (last s)
         pure $ map (:[]) (s <> tail s') 
 
-intervalGame :: Connections -> IO ()
-intervalGame conns = scoredGame conns =<< Rand.evalRandIO (mapM pickPair (concatMap (replicate 3) [50..]))
+intervalGame :: Cloud [[[Int]]]
+intervalGame = mapM pickPair (concatMap (replicate 3) [50..])
     where
     pickPair range0 = do
         bass <- Rand.uniform [36..48]
         topnote <- Rand.uniform [range0..range0+12]
         pure [[bass, topnote]]
 
-chordGame :: Connections -> IO ()
-chordGame conns = scoredGame conns =<< Rand.evalRandIO (mapM pickChord (concatMap (replicate 3) [50..]))
+chordGame :: Cloud [[[Int]]]
+chordGame = mapM pickChord (concatMap (replicate 3) [50..])
     where
     pickChord range0 = do
         basenote <- Rand.uniform [0..11]
