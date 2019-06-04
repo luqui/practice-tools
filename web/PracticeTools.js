@@ -51,7 +51,7 @@ $$.MIDIInterface = function() {
 
     // Debug TODO remember
     indevs.val(1).change();
-    outdevs.val(0).change();
+    outdevs.val(1).change();
   });
 
   return {
@@ -206,10 +206,10 @@ $$.Metronome = function(interface, scheduler) {
       (() => {
         var j = i;
         scheduler.schedule(beat + j/pat.spacing, () => {
-          interface.sendMIDI([0x91, 42, pat.velocities[j]]);
+          interface.sendMIDI([0x90, 96, pat.velocities[j]]);
         });
-        scheduler.schedule(beat + (j+0.5)/pat.spacing, () => {
-          interface.sendMIDI([0x91, 42, 0]);
+        scheduler.schedule(beat + (j+0.05)/pat.spacing, () => {
+          interface.sendMIDI([0x90, 96, 0]);
         });
       })();
     }
@@ -240,6 +240,7 @@ $$.AccuracyFilter = function(scheduler, listen) {
 
   var hitevent = $$.Event();
   var missevent = $$.Event();
+  var noteevent = $$.Event();
 
   listen.listen(msg => {
     var data = msg.data;
@@ -249,21 +250,23 @@ $$.AccuracyFilter = function(scheduler, listen) {
       var now = scheduler.now();
       var target = Math.round(scheduler.now()*divs)/divs;
       if (60000.0*Math.abs(target-now)/scheduler.tempo() <= accuracy.val()) {
-        hitevent.fire(msg);
+        hitevent.fire();
+        noteevent.fire(msg);
       }
       else {
-        missevent.fire(msg);
+        missevent.fire();
       }
     }
     else {
-      hitevent.fire(msg);
+      noteevent.fire(msg);
     }
   });
 
   return {
     widget: widget,
     hitevent: hitevent,
-    missevent: missevent
+    missevent: missevent,
+    noteevent: noteevent
   }
 };
 

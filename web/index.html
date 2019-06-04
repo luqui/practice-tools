@@ -35,7 +35,14 @@
         //var recorder = PT.Recorder(interface, scheduler, script => looper.play(script));
         //var looper = PT.Looper(interface, scheduler);
 
-        filter.hitevent.listen(msg => interface.sendMIDI(msg.data));
+        filter.missevent.listen(() => {
+          interface.sendMIDI([ 0x90, 30, 64 ]);
+          scheduler.schedule(scheduler.now() + 0.05, () => {
+            interface.sendMIDI([ 0x90, 30, 0 ]);
+          });
+        });
+
+        //filter.noteevent.listen(msg => interface.sendMIDI(msg.data));
 
         $('#container').append(
           interface.widget,
