@@ -1,0 +1,16 @@
+<html>
+  <head>
+    <script language="javascript" src="jquery-3.3.1.js"></script>
+    <script language="javascript" src="Keyboard.js"></script>
+    <script>
+      $(function() {
+        var kb = new (Keyboard($).Keyboard)($('#canvas')[0], 36, 72);
+        kb.draw();
+      });
+    </script>
+  </head>
+  <body>
+    <canvas id="canvas" width="600">
+    </canvas>
+  </body>
+</html>
