@@ -3,7 +3,8 @@ Synth = function(Tone) {
 var $$ = {};
 
 $$.Synth = function() {
-  this.synth = new Tone.PolySynth(4, Tone.Synth).toMaster();
+  this.synth = new Tone.PolySynth(4, Tone.Synth, { envelope: { attack: 0.01, decay: 5, sustain: 0.1, release: 1 } }).toMaster();
+  this.synth.volume.value = -6;
 };
 
 var toNoteOctave = function(key) {
