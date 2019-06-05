@@ -25,16 +25,9 @@ makeInterface = do
     
     poller <- makeMIDIPoller midi
 
-    void . liftIO . forkIO . forever $ do
-        void waitForAnimationFrame
-        maybee <- poller 
-        forM_ maybee $ \e -> do
-            doc <- jsg "document"
-            void $ doc # "write" $ toJSVal (toJSString (show e))
-
     let send e = do
             dat <- toJSData e
-            void $ midi # "send" $ dat
+            void $ midi # "sendMIDI" $ dat
 
     pure (Input poller, Output send)
 

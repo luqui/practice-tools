@@ -236,7 +236,7 @@ listenChord (src, dest) = listenOn Set.empty
     waitNote = do
         e <- getNextEvent (src,dest)
         case e of
-            Just (MIDI.NoteOn _ note vel) -> pure (note,vel)
+            Just e@(MIDI.NoteOn _ note vel) -> pure (note,vel)
             Nothing -> threadDelay 10000 >> waitNote
 
 getNextEvent :: Connections -> JS.JSM (Maybe (MIDI.Event))
