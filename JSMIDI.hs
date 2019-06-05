@@ -4,8 +4,7 @@ module JSMIDI where
 
 import Prelude hiding ((!!))
 import Control.Arrow (first)
-import Control.Concurrent (forkIO)
-import Control.Monad (forM_, forever, void)
+import Control.Monad (forM_, void)
 import Control.Monad.IO.Class (liftIO)
 import Data.Bits ((.&.), (.|.))
 import Data.IORef

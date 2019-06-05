@@ -3,17 +3,14 @@
 
 import Prelude hiding (seq)
 import qualified JSMIDI as MIDI
-import Data.List (isPrefixOf, tails, delete, nub, sortBy, permutations)
-import Data.Tuple (swap)
+import Data.List (isPrefixOf, tails, delete, nub, sortBy)
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import Control.Concurrent (threadDelay)
-import Control.Monad (filterM, forever, replicateM, join, when, forM_)
+import Control.Monad (forM_)
 import Control.Monad.IO.Class (liftIO)
-import qualified Control.Monad.Trans.State as State
 import qualified Control.Monad.Random as Rand
 import Data.Ord (comparing)
-import System.IO (hFlush, stdout)
 import qualified Language.Javascript.JSaddle as JS
 
 type Cloud = Rand.Rand Rand.StdGen
@@ -25,7 +22,7 @@ getConn = MIDI.makeInterface
 
 combinations :: Int -> [a] -> [[a]]
 combinations 0 _ = [[]]
-combinations n [] = []
+combinations _ [] = []
 combinations n (x:xs) = map (x:) (combinations (n-1) xs) ++ combinations n xs
 
 shuffle :: [a] -> Cloud [a]
@@ -62,9 +59,6 @@ increasingExercises = Rand.uniform range >>= \(n0 :: Int) -> go [n0]
 
 
 
-noteSequence :: Int -> Cloud Int -> Cloud Int -> Cloud [[Int]]
-noteSequence size baseNote intervals = map (:[]) <$> byIntervals size baseNote intervals
-
 fanCloud :: Cloud a -> Cloud a
 fanCloud m = Rand.evalRand m <$> Rand.getSplit
 
@@ -76,25 +70,10 @@ main = do
     conns <- getConn
     scoredGame conns =<< evalRandJS (chunkerleave 10 <$> sequenceA (map fanCloud [rowGame, chordGame, intervalGame]))
 
-interleave :: [[a]] -> Cloud [a]
-interleave [] = pure []
-interleave xss = do
-    n <- Rand.uniform $ zipWith const [0..] xss
-    case xss !! n of
-        [] -> interleave (take n xss ++ drop (n+1) xss)
-        (x:xs) -> (x:) <$> interleave (take n xss ++ [xs] ++ drop (n+1) xss)
-
 chunkerleave :: Int -> [[a]] -> [a]
 chunkerleave _ [] = []
 chunkerleave n ([]:xss) = chunkerleave n xss
 chunkerleave n (xs:xss) = take n xs ++ chunkerleave n (xss ++ [drop n xs])
-
-filterCloud :: (a -> Bool) -> Cloud a -> Cloud a
-filterCloud p c = do
-    x <- c
-    if p x
-        then pure x
-        else filterCloud p c
 
 scale :: Int -> Cloud [Int]
 scale baseNote = Rand.uniform . concatMap (\s -> [s, map (subtract 12) (reverse s)]) . map (scanl (+) baseNote) . concat $ 
@@ -103,16 +82,6 @@ scale baseNote = Rand.uniform . concatMap (\s -> [s, map (subtract 12) (reverse 
     major = [2,2,1,2,2,2,1]
     melodic = [2,1,2,2,2,2,1]
 
-chord :: (Eq a) => Int -> Cloud a -> Cloud [a]
-chord 0 _ = pure []
-chord n notecloud = do
-    note <- notecloud
-    (note :) <$> chord (n-1) (filterCloud (/= note) notecloud)
-
-
-byIntervals :: Int -> Cloud Int -> Cloud Int -> Cloud [Int]
-byIntervals notes baseNote intervals = scanl (+) <$> baseNote <*> replicateM (notes-1) intervals
-        
 
 sequenceRound :: Connections -> [[Int]] -> JS.JSM Bool
 sequenceRound (src,dest) chords = do
@@ -153,13 +122,13 @@ scoredGame conns = go (ScoreStats 0 0 Map.empty 4)
               ++ " | Lives: " ++ show (ssLives score)
         threadDelay 500000
 
-        (round,adv) <- evalRandJS . Rand.weighted $ ((exes !! ssScore score, True), 5) : [ ((ex, False), fromIntegral w) | (ex,w) <- Map.assocs (ssDebt score), w > 0 ]
-        winround <- sequenceRound conns round
+        (gameround,adv) <- evalRandJS . Rand.weighted $ ((exes !! ssScore score, True), 5) : [ ((ex, False), fromIntegral w) | (ex,w) <- Map.assocs (ssDebt score), w > 0 ]
+        winround <- sequenceRound conns gameround
         let score' = ScoreStats
                        { ssScore = if winround && adv then ssScore score + 1 else ssScore score
                        , ssRunLength = if winround then ssRunLength score + 1 else 0
-                       , ssDebt = if winround then Map.alter (addDebt (-1)) round (ssDebt score)
-                                              else Map.alter (addDebt 2) round (ssDebt score)
+                       , ssDebt = if winround then Map.alter (addDebt (-1)) gameround (ssDebt score)
+                                              else Map.alter (addDebt 2) gameround (ssDebt score)
                        , ssLives = if | winround && (ssRunLength score `mod` 10) == 9 -> ssLives score + 1
                                       | winround -> ssLives score
                                       | otherwise -> ssLives score - 1
@@ -236,8 +205,8 @@ listenChord (src, dest) = listenOn Set.empty
     waitNote = do
         e <- getNextEvent (src,dest)
         case e of
-            Just e@(MIDI.NoteOn _ note vel) -> pure (note,vel)
+            Just (MIDI.NoteOn _ note vel) -> pure (note,vel)
             Nothing -> threadDelay 10000 >> waitNote
 
 getNextEvent :: Connections -> JS.JSM (Maybe (MIDI.Event))
-getNextEvent (src, dest) = MIDI.pollEvent src
+getNextEvent (src, _) = MIDI.pollEvent src
