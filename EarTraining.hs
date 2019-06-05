@@ -3,7 +3,7 @@
 
 import Prelude hiding (seq)
 import qualified JSMIDI as MIDI
-import Data.List (isPrefixOf, tails, delete, nub, sortBy)
+import Data.List (isPrefixOf, tails, delete, nub, sort, sortBy)
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import Control.Concurrent (threadDelay)
@@ -34,20 +34,22 @@ shuffle xs = do
 choose :: Int -> [a] -> Cloud [a]
 choose n xs = take n <$> shuffle xs
 
-increasingExercises :: Cloud [[[Int]]]
-increasingExercises = Rand.uniform range >>= \(n0 :: Int) -> go [n0]
+rowGame :: Cloud [[[Int]]]
+rowGame = do
+    baseNote <- Rand.uniform [36..72]
+    let range = [baseNote .. baseNote + 12]
+    Rand.uniform range >>= \n0 -> go range [n0]
     where
-    go :: [Int] -> Cloud [[[Int]]]
-    go notes = concat <$> sequenceA [ pure [[[head notes]]], goLine notes, goChord notes, (go . (: notes) =<< Rand.uniform (foldr delete range notes)) ]
+    go range notes 
+        | sort notes == range = pure []
+        | otherwise =  
+            concat <$> sequenceA [ pure [[[head notes]]], goLine notes, goChord notes, (go range . (: notes) =<< Rand.uniform (foldr delete range notes)) ]
 
     goLine :: [Int] -> Cloud [[[Int]]]
     goLine notes = nub . sortBy (comparing length) . deconstruct 3 . map (:[]) <$> shuffle notes
 
     goChord :: [Int] -> Cloud [[[Int]]]
     goChord notes = map (:[]) <$> choose 4 (combinations 3 notes)
-            
-
-    range = [55..67]
 
     deconstruct :: Int -> [a] -> [[a]]
     deconstruct lmin xs
@@ -55,6 +57,18 @@ increasingExercises = Rand.uniform range >>= \(n0 :: Int) -> go [n0]
         | otherwise = deconstruct lmin pre ++ deconstruct lmin post ++ [xs]
         where
         (pre,post) = (take (length xs `div` 2) xs, drop (length xs `div` 2) xs)
+
+
+challenges :: [(String, Connections -> JS.JSM ())]
+challenges = 
+    [ "row game" --> game rowGame
+    , "tetrachords" --> game chordGame
+    , "'melody' and bass" --> game intervalGame
+    , "modal scale pairs" --> game scaleGame
+    ]
+    where
+    (-->) = (,)
+    game g conns = scoredGame conns =<< evalRandJS g
 
 
 
@@ -74,10 +88,15 @@ jquery query = do
 main :: JS.JSM ()
 main = do
     conns <- getConn
-    void $ jquery "#startButton" JS.# "click" $ JS.fun \_ _ _ -> do
-        void $ jquery "#startButton" JS.# "prop" $ [JS.toJSVal "disabled", JS.toJSVal True]
-        scoredGame conns =<< evalRandJS (chunkerleave 10 <$> sequenceA (map fanCloud [rowGame, chordGame, intervalGame]))
-        void $ jquery "#startButton" JS.# "prop" $ [JS.toJSVal (JS.toJSString"disabled"), JS.toJSVal False]
+    
+    forM_ challenges $ \(name, code) -> do
+        button <- jquery "<button>" JS.# "text" $ ["Play"]
+        void $ button JS.# "click" $ JS.fun \_ _ _ -> do
+            void $ button JS.# "prop" $ ("disabled", True)
+            code conns
+            void $ button JS.# "prop" $ ("disabled", False)
+        jquery "#games" JS.# "append" $ (jquery "<li>" JS.# "text" $ [name])
+                                                       JS.# "append" $ button
 
 chunkerleave :: Int -> [[a]] -> [a]
 chunkerleave _ [] = []
@@ -129,11 +148,17 @@ showStats stats = do
               | otherwise = show (ssLives stats)
     
 
+hasIndex :: Int -> [a] -> Bool
+hasIndex _ [] = False
+hasIndex 0 _ = True
+hasIndex n (_:xs) = hasIndex (n-1) xs
+
 scoredGame :: Connections -> [[[Int]]] -> JS.JSM ()
 scoredGame conns = go (ScoreStats 0 0 Map.empty 4)
     where
     go score exes 
       | ssLives score == 0 = showStats score
+      | not (hasIndex (ssScore score) exes) = JS.eval "console.log('Done')" >> showStats score
       | otherwise = do
         showStats score
         threadDelay 500000
@@ -148,15 +173,12 @@ scoredGame conns = go (ScoreStats 0 0 Map.empty 4)
                        , ssLives = if | winround && (ssRunLength score `mod` 10) == 9 -> ssLives score + 1
                                       | winround -> ssLives score
                                       | otherwise -> ssLives score - 1
-                        }
+                       }
         go score' exes
     
     addDebt x Nothing | x > 0 = Just x
     addDebt x (Just y) | x + y > 0 = Just (x+y)
     addDebt _ _ = Nothing
-
-rowGame :: Cloud [[[Int]]]
-rowGame = increasingExercises
 
 scaleGame :: Cloud [[[Int]]]
 scaleGame = mapM pickScale [60..]
