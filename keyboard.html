@@ -1,10 +1,14 @@
 <html>
   <head>
     <script language="javascript" src="jquery-3.3.1.js"></script>
+    <script language="javascript" src="Tone.js"></script>
     <script language="javascript" src="Keyboard.js"></script>
+    <script language="javascript" src="Synth.js"></script>
     <script>
       $(function() {
-        var kb = new (Keyboard($).Keyboard)($('#canvas')[0], $('#overlay')[0], 36, 72, console.log);
+        synth = new (Synth(Tone).Synth)();
+
+        var kb = new (Keyboard($).Keyboard)($('#canvas')[0], $('#overlay')[0], 36, 72, e => synth.send(e));
         kb.installClickHandler();
         kb.draw();
       });
