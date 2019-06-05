@@ -99,7 +99,7 @@ main = do
             void $ button JS.# "prop" $ ("disabled", False)
 
             when (score > hiscore) $ do
-                opts <- JS.eval "{ expires: 365 }"
+                opts <- JS.eval "({ expires: 365 })"
                 void $ JS.jsg "jQuery" JS.# "cookie" $ (cookiename, score, opts)
         jquery "#games" JS.# "append" $ (jquery "<li>" JS.# "text" $ [name ++ " (" ++ show hiscore ++ ")"])
                                                        JS.# "append" $ button
@@ -169,7 +169,7 @@ scoredGame conns = go (ScoreStats 0 0 Map.empty 4)
         showStats score
         threadDelay 500000
 
-        (gameround,adv) <- evalRandJS . Rand.weighted $ ((exes !! ssScore score, True), 5) : [ ((ex, False), fromIntegral w) | (ex,w) <- Map.assocs (ssDebt score), w > 0 ]
+        (gameround,adv) <- evalRandJS . Rand.weighted $ ((exes !! ssScore score, True), 10) : [ ((ex, False), fromIntegral w) | (ex,w) <- Map.assocs (ssDebt score), w > 0 ]
         winround <- sequenceRound conns gameround
         let score' = ScoreStats
                        { ssScore = if winround && adv then ssScore score + 1 else ssScore score
