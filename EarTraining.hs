@@ -7,7 +7,7 @@ import Data.List (isPrefixOf, tails, delete, nub, sort, sortBy)
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import Control.Concurrent (threadDelay)
-import Control.Monad (forM_, void)
+import Control.Monad (forM_, void, when)
 import Control.Monad.IO.Class (liftIO)
 import qualified Control.Monad.Random as Rand
 import Data.Ord (comparing)
@@ -59,7 +59,7 @@ rowGame = do
         (pre,post) = (take (length xs `div` 2) xs, drop (length xs `div` 2) xs)
 
 
-challenges :: [(String, Connections -> JS.JSM ())]
+challenges :: [(String, Connections -> JS.JSM Int)]
 challenges = 
     [ "row game" --> game rowGame
     , "tetrachords" --> game chordGame
@@ -90,12 +90,18 @@ main = do
     conns <- getConn
     
     forM_ challenges $ \(name, code) -> do
+        let cookiename = name ++ " hiscore"
+        hiscore <- fmap (maybe 0 id) . JS.fromJSVal =<< (JS.jsg "jQuery" JS.# "cookie" $ [cookiename])
         button <- jquery "<button>" JS.# "text" $ ["Play"]
         void $ button JS.# "click" $ JS.fun \_ _ _ -> do
             void $ button JS.# "prop" $ ("disabled", True)
-            code conns
+            score <- code conns
             void $ button JS.# "prop" $ ("disabled", False)
-        jquery "#games" JS.# "append" $ (jquery "<li>" JS.# "text" $ [name])
+
+            when (score > hiscore) $ do
+                opts <- JS.eval "{ expires: 365 }"
+                void $ JS.jsg "jQuery" JS.# "cookie" $ (cookiename, score, opts)
+        jquery "#games" JS.# "append" $ (jquery "<li>" JS.# "text" $ [name ++ " (" ++ show hiscore ++ ")"])
                                                        JS.# "append" $ button
 
 chunkerleave :: Int -> [[a]] -> [a]
@@ -153,12 +159,12 @@ hasIndex _ [] = False
 hasIndex 0 _ = True
 hasIndex n (_:xs) = hasIndex (n-1) xs
 
-scoredGame :: Connections -> [[[Int]]] -> JS.JSM ()
+scoredGame :: Connections -> [[[Int]]] -> JS.JSM Int
 scoredGame conns = go (ScoreStats 0 0 Map.empty 4)
     where
     go score exes 
-      | ssLives score == 0 = showStats score
-      | not (hasIndex (ssScore score) exes) = JS.eval "console.log('Done')" >> showStats score
+      | ssLives score == 0 = showStats score >> pure (ssScore score)
+      | not (hasIndex (ssScore score) exes) = JS.eval "console.log('Done')" >> showStats score >> pure (ssScore score)
       | otherwise = do
         showStats score
         threadDelay 500000
