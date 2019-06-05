@@ -4,13 +4,30 @@
     <script language="javascript" src="Keyboard.js"></script>
     <script>
       $(function() {
-        var kb = new (Keyboard($).Keyboard)($('#canvas')[0], 36, 72);
+        var kb = new (Keyboard($).Keyboard)($('#canvas')[0], $('#overlay')[0], 36, 72, console.log);
+        kb.installClickHandler();
         kb.draw();
       });
     </script>
+    <style>
+      #viewport {
+        position: relative;
+      }
+      #viewport canvas {
+        position: absolute;
+      }
+      #overlay {
+        z-index: 1;
+      }
+      #canvas {
+        z-index: 0;
+      }
+    </style>
   </head>
   <body>
-    <canvas id="canvas" width="600">
-    </canvas>
+    <div id="viewport">
+      <canvas id="overlay" width="600"> </canvas>
+      <canvas id="canvas" width="600"> </canvas>
+    </div>
   </body>
 </html>
