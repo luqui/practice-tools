@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -Wall #-}
-{-# LANGUAGE MultiWayIf, ScopedTypeVariables #-}
+{-# LANGUAGE MultiWayIf, ScopedTypeVariables, BlockArguments #-}
 
 import Prelude hiding (seq)
 import qualified JSMIDI as MIDI
@@ -7,7 +7,7 @@ import Data.List (isPrefixOf, tails, delete, nub, sortBy)
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import Control.Concurrent (threadDelay)
-import Control.Monad (forM_)
+import Control.Monad (forM_, void)
 import Control.Monad.IO.Class (liftIO)
 import qualified Control.Monad.Random as Rand
 import Data.Ord (comparing)
@@ -65,10 +65,19 @@ fanCloud m = Rand.evalRand m <$> Rand.getSplit
 evalRandJS :: Cloud a -> JS.JSM a
 evalRandJS = liftIO . Rand.evalRandIO
 
+
+jquery :: String -> JS.JSM JS.JSVal
+jquery query = do
+    jq <- JS.jsg "jQuery"
+    JS.call jq jq [query]
+
 main :: JS.JSM ()
 main = do
     conns <- getConn
-    scoredGame conns =<< evalRandJS (chunkerleave 10 <$> sequenceA (map fanCloud [rowGame, chordGame, intervalGame]))
+    void $ jquery "#startButton" JS.# "click" $ JS.fun \_ _ _ -> do
+        void $ jquery "#startButton" JS.# "prop" $ [JS.toJSVal "disabled", JS.toJSVal True]
+        scoredGame conns =<< evalRandJS (chunkerleave 10 <$> sequenceA (map fanCloud [rowGame, chordGame, intervalGame]))
+        void $ jquery "#startButton" JS.# "prop" $ [JS.toJSVal (JS.toJSString"disabled"), JS.toJSVal False]
 
 chunkerleave :: Int -> [[a]] -> [a]
 chunkerleave _ [] = []
@@ -110,16 +119,23 @@ data ScoreStats = ScoreStats
     , ssLives :: Int
     }
 
+showStats :: ScoreStats -> JS.JSM ()
+showStats stats = do
+    void $ jquery "#level" JS.# "text" $ [show (ssScore stats)]
+    void $ jquery "#combo" JS.# "text" $ [show (ssRunLength stats)]
+    void $ jquery "#lives" JS.# "text" $ [showlives]
+    where
+    showlives | ssLives stats == 0 = "Game Over"
+              | otherwise = show (ssLives stats)
+    
+
 scoredGame :: Connections -> [[[Int]]] -> JS.JSM ()
 scoredGame conns = go (ScoreStats 0 0 Map.empty 4)
     where
     go score exes 
-      | ssLives score == 0 = putStrLn "Game Over"
+      | ssLives score == 0 = showStats score
       | otherwise = do
-        putStrLn $ "Level: " ++ show (ssScore score) 
-              ++ " | Debt: " ++ show (sum (ssDebt score))
-              ++ " | Run:  " ++ show (ssRunLength score)
-              ++ " | Lives: " ++ show (ssLives score)
+        showStats score
         threadDelay 500000
 
         (gameround,adv) <- evalRandJS . Rand.weighted $ ((exes !! ssScore score, True), 5) : [ ((ex, False), fromIntegral w) | (ex,w) <- Map.assocs (ssDebt score), w > 0 ]
