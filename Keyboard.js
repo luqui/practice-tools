@@ -67,6 +67,9 @@ $$.Keyboard.prototype._getKey = function(x, y) {
 };
 
 $$.Keyboard.prototype._drawKey = function(cx, ovcx, k, color) {
+  if (cx === null) { cx = this.canvas.getContext('2d'); }
+  if (ovcx === null) { ovcx = this.overlay.getContext('2d'); }
+
   var rect = this._getRect(k);
   if (rect === null) { return; }
 
@@ -115,22 +118,30 @@ $$.Keyboard.prototype.installClickHandler = function() {
     var key = this._getKey(pos.x, pos.y);
     if (key == null) { return; }
 
-    var cx = this.canvas.getContext('2d');
-    var ovcx = this.overlay.getContext('2d');
-    this._drawKey(cx, ovcx, key, 'orange');
 
-    this.playingNotes.push(key);
     if (!e.shiftKey) {
+      this.playingNotes.push(key);
+      this._drawKey(null, null, key, 'orange');
       this.callback([0x90, key, 96]);
+    }
+    else {
+      if (this.playingNotes.includes(key)) {
+        var ix = this.playingNotes.findIndex(k => k == key);
+        this.playingNotes = this.playingNotes.slice(0,ix).concat(this.playingNotes.slice(ix+1));
+        this._drawKey(null, null, key);
+      }
+      else {
+        this.playingNotes.push(key);
+        this._drawKey(null, null, key, 'yellow');
+      }
     }
   });
 
   jQuery(window).mouseup(e => {
     if (!e.shiftKey) {
-      this.draw();
-
       for (var k of this.playingNotes) {
         this.callback([0x90, k, 0]);
+        this._drawKey(null, null, k);
       }
       this.playingNotes = [];
     }
@@ -138,18 +149,18 @@ $$.Keyboard.prototype.installClickHandler = function() {
 
   jQuery(window).keyup(e => {
     if (e.which == 16) { // shift
-      this.draw();
-
       var notes = this.playingNotes;
       this.playingNotes = [];
       
       for (var k of notes) {
         this.callback([0x90, k, 96]);
+        this._drawKey(null, null, k, 'orange');
       }
 
       setTimeout(() => {
         for (var k of notes) {
           this.callback([0x90, k, 0]);
+          this._drawKey(null, null, k);
         }
       }, 500);
     }
