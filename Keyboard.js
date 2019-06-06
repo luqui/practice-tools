@@ -125,55 +125,83 @@ $$.Keyboard.prototype._transformMousePos = function(x, y) {
 };
 
 $$.Keyboard.prototype.installClickHandler = function() {
-  jQuery(this.overlay).mousedown(e => {
-    var pos = this._transformMousePos(e.clientX, e.clientY);
+  var self = this;
+
+  var down = function(pos, shift) {
     if (pos == null) { return; }
-    var key = this._getKey(pos.x, pos.y);
+    var key = self._getKey(pos.x, pos.y);
     if (key == null) { return; }
 
 
-    if (!e.shiftKey) {
-      this.playingNotes.push(key);
-      this._drawKey(null, null, key, 'orange');
-      this.callback([0x90, key, 96]);
+    if (!shift) {
+      self.playingNotes.push(key);
+      self._drawKey(null, null, key, 'orange');
+      self.callback([0x90, key, 96]);
     }
     else {
-      if (this.playingNotes.includes(key)) {
-        var ix = this.playingNotes.findIndex(k => k == key);
-        this.playingNotes = this.playingNotes.slice(0,ix).concat(this.playingNotes.slice(ix+1));
-        this._drawKey(null, null, key);
+      if (self.playingNotes.includes(key)) {
+        var ix = self.playingNotes.findIndex(k => k == key);
+        self.playingNotes = self.playingNotes.slice(0,ix).concat(self.playingNotes.slice(ix+1));
+        self._drawKey(null, null, key);
       }
       else {
-        this.playingNotes.push(key);
-        this._drawKey(null, null, key, 'yellow');
+        self.playingNotes.push(key);
+        self._drawKey(null, null, key, 'yellow');
       }
+    }
+  };
+
+  var up = function(shift) {
+    if (!shift) {
+      for (var k of self.playingNotes) {
+        self.callback([0x90, k, 0]);
+        self._drawKey(null, null, k);
+      }
+      self.playingNotes = [];
+    }
+  };
+
+  jQuery(self.overlay).mousedown(e => {
+    console.log("mousedown", e);
+    var pos = self._transformMousePos(e.clientX, e.clientY);
+    if (pos != null) {
+      down(pos, e.shiftKey);
     }
   });
 
-  jQuery(window).mouseup(e => {
-    if (!e.shiftKey) {
-      for (var k of this.playingNotes) {
-        this.callback([0x90, k, 0]);
-        this._drawKey(null, null, k);
-      }
-      this.playingNotes = [];
+  jQuery(self.overlay).on('touchstart', e => {
+    console.log("touchstart", e);
+    var pos = self._transformMousePos(e.touches[0].clientX, e.touches[0].clientY);
+    if (pos != null) {
+      down(pos, false);
     }
+    return false;
+  });
+
+  jQuery(window).mouseup(e => {
+    console.log("mouseup", e);
+    up(e.shiftKey);
+  });
+
+  jQuery(window).on('touchend', e => {
+    console.log("touchend", e);
+    up(false);
   });
 
   jQuery(window).keyup(e => {
     if (e.which == 16) { // shift
-      var notes = this.playingNotes;
-      this.playingNotes = [];
+      var notes = self.playingNotes;
+      self.playingNotes = [];
       
       for (var k of notes) {
-        this.callback([0x90, k, 96]);
-        this._drawKey(null, null, k, 'orange');
+        self.callback([0x90, k, 96]);
+        self._drawKey(null, null, k, 'orange');
       }
 
       setTimeout(() => {
         for (var k of notes) {
-          this.callback([0x90, k, 0]);
-          this._drawKey(null, null, k);
+          self.callback([0x90, k, 0]);
+          self._drawKey(null, null, k);
         }
       }, 500);
     }
