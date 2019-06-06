@@ -4,15 +4,18 @@
     <script language="javascript" src="Tone.js"></script>
     <script language="javascript" src="Keyboard.js"></script>
     <script language="javascript" src="Synth.js"></script>
+    <script language="javascript" src="MIDITools.js"></script>
     <script>
       $(function() {
-        synth = new (Synth(Tone).Synth)();
+        var tools = MIDITools(jQuery, Keyboard(jQuery), Synth(Tone));
+        
+        var input = new tools.InputSelector();
+        var output = new tools.OutputSelector();
 
-        var kb = new (Keyboard($).Keyboard)(600, 200, 36, 72, e => synth.send(e));
-        $('#viewport').append(kb.container);
+        $('#viewport').append(input.widget);
+        $('#viewport').append(output.widget);
 
-        kb.installClickHandler();
-        kb.draw();
+        input.event.listen(msg => output.send(msg));
       });
     </script>
   </head>

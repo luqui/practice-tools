@@ -15,6 +15,8 @@ $$.Keyboard = function(width, height, startKey, endKey, midicallback) {
       .css('z-index', 1)[0];
   this.container = jQuery('<div>')
       .css('position', 'relative')
+      .css('width', width)
+      .css('height', height)
       .append(this.canvas, this.overlay)[0];
 
   this.startKey = startKey;

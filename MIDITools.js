@@ -1,4 +1,4 @@
-MIDITools = function($) {
+MIDITools = function($, Keyboard, Synth) {
 
 var $$ = {};
 
@@ -12,55 +12,139 @@ $$.Event = function() {
   };
 };
 
-$$.MIDIInterface = function() {
-  var indevice = null;
-  var outdevice = null;
-
-  var setDeviceList = function(sel, devs, onchange) {
-    sel.empty();
-    sel.append($('<option>').attr('value', null).text("None"));
-    for (var i = 0; i < devs.length; i++) {
-      sel.append(
-        $('<option>').attr('value', i).text(devs[i].name));
-    }
-    sel.change(onchange);
+$$.EventSwitcher = function() {
+  var event = $$.Event();
+  var sourceid = {};  // blank object as unique id
+  
+  return {
+    listen: event.listen,
+    setSource: source => {
+      var newsourceid = {};
+      sourceid = newsourceid;
+      source.listen(x => {
+        if (sourceid === newsourceid) {
+          event.fire(x);
+        }
+      });
+    },
   };
+};
 
-  var indevs = $('<select>');
-  var outdevs = $('<select>');
-  var widget = $('<div>').append(
-    $('<span>').text('In:'), indevs,
-    $('<span>').text('Out:'), outdevs);
+$$.MIDIInput = function(indev) {
+  this.event = $$.Event();
+  this.widget = $('<span>').text(indev.name)[0];
+  this.name = indev.name;
+  var event = this.event;
 
-  var inevent = $$.Event();
+  indev.onmidimessage = msg => event.fire(msg);  // I don't understand `this` scoping well enough to inline `event`
+};
+
+$$.KeyboardInput = function() {
+  this.event = $$.Event();
+
+  var event = this.event;
+  var keyboard = new Keyboard.Keyboard(600, 200, 36, 72, m => event.fire(m));
+  
+  this.widget = keyboard.container;
+  this.name = "Virtual Keyboard";
+
+  keyboard.draw();
+  keyboard.installClickHandler();
+};
+
+$$.InputSelector = function() {
+  this.name = "Input Selector";
+  this.event = $$.EventSwitcher();
+  var event = this.event;
+
+  var inputs = [new $$.KeyboardInput()];
+  var select = $('<select>');
+  var container = $('<div>');
+  this.widget = $('<div>').append(select, container)[0];
+
+  var makeSelect = () => {
+    for (var i = 0; i < inputs.length; i++) {
+      select.append($('<option>').attr('value', i).text(inputs[i].name));
+      container.append(inputs[i].widget);
+    }
+
+    var dochange = () => {
+      var i = select.val();
+      for (var j = 0; j < inputs.length; j++) {
+        $(inputs[j].widget).css('display', 'none');
+      }
+      $(inputs[i].widget).css('display', 'block');
+      event.setSource(inputs[i].event);
+    };
+    select.change(dochange);
+    select.val(0);
+    dochange();
+  };
 
   navigator.requestMIDIAccess().then(access => {
-    var inputs = Array.from(access.inputs.values());
-    var outputs = Array.from(access.outputs.values());
-    setDeviceList(indevs, inputs, () => {
-      indevice = inputs[indevs.val()];
-      if (indevice) {
-        indevice.onmidimessage = msg => {
-          inevent.fire(msg);
-        };
-      }
-    });
-    setDeviceList(outdevs, outputs, () => {
-      outdevice = outputs[outdevs.val()];
-    });
+    for (var i of access.inputs.values()) {
+      inputs.push(new $$.MIDIInput(i));
+    }
 
-    // Debug TODO remember
-    indevs.val(1).change();
-    outdevs.val(1).change();
+    makeSelect();
+  }, reason => {
+    makeSelect();
   });
+};
 
-  return {
-    widget: widget,
-    sendMIDI: data => { 
-      if (outdevice) { outdevice.send(data) } 
-    },
-    event: inevent
+
+$$.SynthOutput = function() {
+  this.name = "JS Synth";
+  var synth = new Synth.Synth();
+  this.send = dat => synth.send(dat);
+  this.widget = $('<span>').text('JS Synth')[0];
+};
+
+$$.MIDIOutput = function(dev) {
+  this.name = dev.name;
+  this.send = dat => dev.send(dat);
+  this.widget = $('<span>').text(dev.name)[0];
+};
+
+
+$$.OutputSelector = function() {
+  this.name = "Output Selector";
+  this.send = dat => {};
+  var self = this;
+
+  var outputs = [new $$.SynthOutput()];
+  var select = $('<select>');
+  var container = $('<div>');
+  this.widget = $('<div>').append(select, container)[0];
+
+  var makeSelect = () => {
+    for (var i = 0; i < outputs.length; i++) {
+      select.append($('<option>').attr('value', i).text(outputs[i].name));
+      container.append(outputs[i].widget);
+    }
+
+    var dochange = () => {
+      var i = select.val();
+      for (var j = 0; j < outputs.length; j++) {
+        $(outputs[j].widget).css('display', 'none');
+      }
+      $(outputs[i].widget).css('display', 'block');
+      self.send = dat => outputs[i].send(dat);
+    };
+    select.change(dochange);
+    select.val(0);
+    dochange();
   };
+
+  navigator.requestMIDIAccess().then(access => {
+    for (var i of access.outputs.values()) {
+      outputs.push(new $$.MIDIOutput(i));
+    }
+
+    makeSelect();
+  }, reason => {
+    makeSelect();
+  });
 };
 
 return $$;
