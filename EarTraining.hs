@@ -36,7 +36,7 @@ choose n xs = take n <$> shuffle xs
 
 rowGame :: Cloud [[[Int]]]
 rowGame = do
-    baseNote <- Rand.uniform [36..72]
+    baseNote <- Rand.uniform [36..71]
     let range = [baseNote .. baseNote + 12]
     Rand.uniform range >>= \n0 -> go range [n0]
     where
@@ -195,7 +195,7 @@ scaleGame = mapM pickScale [60..]
         pure $ map (:[]) (s <> tail s') 
 
 intervalGame :: Cloud [[[Int]]]
-intervalGame = mapM pickPair (concatMap (replicate 3) [50..])
+intervalGame = mapM pickPair (concatMap (replicate 3) [50..71])
     where
     pickPair range0 = do
         bass <- Rand.uniform [36..48]
@@ -203,7 +203,7 @@ intervalGame = mapM pickPair (concatMap (replicate 3) [50..])
         pure [[bass, topnote]]
 
 chordGame :: Cloud [[[Int]]]
-chordGame = mapM pickChord (concatMap (replicate 3) [50..])
+chordGame = mapM pickChord (concatMap (replicate 3) [50..71])
     where
     pickChord range0 = do
         basenote <- Rand.uniform [0..11]

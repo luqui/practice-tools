@@ -18,15 +18,21 @@ newtype Output = Output { sendEvent :: Event -> JSM () }
 
 makeInterface :: JSM (Input, Output)
 makeInterface = do
-    tools <- jsg1 "MIDITools" =<< jsg "jQuery"
-    midi <- tools # "MIDIInterface" $ ()
-    void $ (jsg1 "jQuery" =<< (jsg "document" ! "body")) # "append" $ (midi ! "widget")
+    -- instantiate midi tools module, dependency injection style
+    tools <- jsgf "MIDITools" (
+        jsg "jQuery",
+        jsg1 "Keyboard" =<< jsg "jQuery",
+        jsg1 "Synth" =<< jsg "Tone")
+
+    io <- new (tools ! "IOSelector") ()
+
+    void $ (jsg1 "jQuery" =<< (jsg "document" ! "body")) # "append" $ (io ! "widget")
     
-    poller <- makeMIDIPoller midi
+    poller <- makeMIDIPoller io
 
     let send e = do
             dat <- toJSData e
-            void $ midi # "sendMIDI" $ dat
+            void $ io # "send" $ dat
 
     pure (Input poller, Output send)
 
@@ -34,8 +40,7 @@ data Event = NoteOn Int Int Int  -- channel (0 based), key, vel normalized with 
     deriving (Show)
 
 fromJSData :: JSVal -> JSM (Maybe Event)
-fromJSData v = do
-    dat <- v ! "data"
+fromJSData dat = do
     d0 <- fromJSValUnchecked =<< dat !! 0
     d1 <- fromJSValUnchecked =<< dat !! 1
     d2 <- fromJSValUnchecked =<< dat !! 2

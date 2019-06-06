@@ -43,7 +43,7 @@ $$.KeyboardInput = function() {
   this.event = $$.Event();
 
   var event = this.event;
-  var keyboard = new Keyboard.Keyboard(600, 200, 36, 72, m => event.fire(m));
+  var keyboard = new Keyboard.Keyboard(800, 200, 36, 84, m => event.fire(m));
   
   this.widget = keyboard.container;
   this.name = "Virtual Keyboard";
@@ -144,6 +144,25 @@ $$.OutputSelector = function() {
     makeSelect();
   }, reason => {
     makeSelect();
+  });
+};
+
+
+$$.IOSelector = function() {
+  var passThru = $('<input>').attr('type', 'checkbox').prop('checked', true);
+  var input = new $$.InputSelector();
+  var output = new $$.OutputSelector();
+  this.event = input.event;
+  this.send = dat => output.send(dat);
+  this.widget = $('<div>').append(
+    input.widget,
+    $('<div>').append($('<span>').text('THRU'), passThru),
+    output.widget);
+
+  this.event.listen(dat => {
+    if (passThru.prop('checked')) {
+      output.send(dat);
+    }
   });
 };
 
