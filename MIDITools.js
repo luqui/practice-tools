@@ -50,7 +50,7 @@ $$.KeyboardInput = function() {
   this.event = $$.Event();
 
   var event = this.event;
-  var keyboard = new Keyboard.Keyboard(800, 200, 36, 84, m => event.fire(m));
+  var keyboard = new Keyboard.Keyboard(36, 84, m => event.fire(m));
   
   this.widget = keyboard.container;
   this.name = "Virtual Keyboard";

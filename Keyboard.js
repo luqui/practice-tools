@@ -2,25 +2,36 @@ Keyboard = function(jQuery) {
 
 var $$ = {};
 
-$$.Keyboard = function(width, height, startKey, endKey, midicallback) {
+$$.Keyboard = function(startKey, endKey, midicallback) {
+  var width = window.innerWidth;
+  var height = Math.round(width / 4);
+
   this.canvas = jQuery('<canvas>')
       .attr('width', width)
       .attr('height', height)
       .css('position', 'absolute')
-      .css('z-index', 0)[0];
+      .css('z-index', 1)[0];
   this.overlay = jQuery('<canvas>')
       .attr('width', width)
       .attr('height', height)
       .css('position', 'absolute')
-      .css('z-index', 1)[0];
+      .css('z-index', 2)[0];
+  this.playButton = jQuery('<button>')
+      .css('width', width)
+      .css('height', 100)
+      .css('z-index', 0)
+      .text('Play')
+      .css('display', 'none');
   this.container = jQuery('<div>')
       .css('position', 'relative')
       .css('width', width)
-      .css('height', height)
-      .append(this.canvas, this.overlay)[0];
+      .css('height', height+100)
+      .append(this.canvas, this.overlay, jQuery('<div>').css('height', height), this.playButton)[0];
 
   this.startKey = startKey;
   this.endKey = endKey;
+
+  this.mobileDetected = false;
 
   this.callback = midicallback || (() => { });
 
@@ -160,9 +171,27 @@ $$.Keyboard.prototype.installClickHandler = function() {
       self.playingNotes = [];
     }
   };
+  
+  var playChord = function() {
+    var notes = self.playingNotes;
+    self.playingNotes = [];
+
+    console.log(notes);
+    
+    for (var k of notes) {
+      self.callback([0x90, k, 96]);
+      self._drawKey(null, null, k, 'orange');
+    }
+
+    setTimeout(() => {
+      for (var k of notes) {
+        self.callback([0x90, k, 0]);
+        self._drawKey(null, null, k);
+      }
+    }, 500);
+  };
 
   jQuery(self.overlay).mousedown(e => {
-    console.log("mousedown", e);
     var pos = self._transformMousePos(e.clientX, e.clientY);
     if (pos != null) {
       down(pos, e.shiftKey);
@@ -170,42 +199,33 @@ $$.Keyboard.prototype.installClickHandler = function() {
   });
 
   jQuery(self.overlay).on('touchstart', e => {
-    console.log("touchstart", e);
+    self.playButton.css('display', 'block');
+    self.mobileDetected = true;
+    
     var pos = self._transformMousePos(e.touches[0].clientX, e.touches[0].clientY);
     if (pos != null) {
-      down(pos, false);
+      down(pos, true);
     }
-    return false;
+    return false;  // don't propagate
   });
 
   jQuery(window).mouseup(e => {
-    console.log("mouseup", e);
-    up(e.shiftKey);
+    if (!self.mobileDetected) {
+      up(e.shiftKey);
+    }
   });
 
   jQuery(window).on('touchend', e => {
-    console.log("touchend", e);
-    up(false);
+    up(true);
   });
 
   jQuery(window).keyup(e => {
     if (e.which == 16) { // shift
-      var notes = self.playingNotes;
-      self.playingNotes = [];
-      
-      for (var k of notes) {
-        self.callback([0x90, k, 96]);
-        self._drawKey(null, null, k, 'orange');
-      }
-
-      setTimeout(() => {
-        for (var k of notes) {
-          self.callback([0x90, k, 0]);
-          self._drawKey(null, null, k);
-        }
-      }, 500);
+      playChord();
     }
   });
+
+  self.playButton.click(playChord);
 };
 
 return $$;
