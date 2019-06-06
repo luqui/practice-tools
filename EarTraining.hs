@@ -66,6 +66,7 @@ challenges :: [(String, Connections -> JS.JSM Int)]
 challenges = 
     [ "row game" --> game rowGame
     , "giant steps" --> game giantStepsGame
+    , "random walk" --> game randomWalkGame
     , "triads" --> game triadGame
     , "tetrachords" --> game tetrachordGame
     , "'melody' and bass" --> game intervalGame
@@ -190,6 +191,18 @@ scoredGame conns exes = drainInput conns >> go (ScoreStats 0 0 Map.empty 4)
     addDebt x Nothing | x > 0 = Just x
     addDebt x (Just y) | x + y > 0 = Just (x+y)
     addDebt _ _ = Nothing
+
+randomWalkGame :: Cloud [[[Int]]]
+randomWalkGame = fmap ((map.map) (:[]) . takes (replicate 3 =<< [1..])) . walk =<< Rand.uniform [36..83]
+    where
+    walk n = do
+        next <- Rand.uniform [ n + m | m <- [-2,-1,1,2], 36 <= n + m && n + m <= 83 ]
+        (next :) <$> walk next
+
+    takes [] _ = []
+    takes _ [] = []
+    takes (l:ls) xs = take l xs : takes ls (drop l xs)
+
 
 scaleGame :: Cloud [[[Int]]]
 scaleGame = mapM (\b -> join (Rand.uniform [pickScale b, pickScaleRev b])) [48..71]
