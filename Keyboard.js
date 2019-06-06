@@ -202,7 +202,8 @@ $$.Keyboard.prototype.installClickHandler = function() {
     self.playButton.css('display', 'block');
     self.mobileDetected = true;
     
-    var pos = self._transformMousePos(e.touches[0].clientX, e.touches[0].clientY);
+    var t = e.touches[e.touches.length-1];
+    var pos = self._transformMousePos(t.clientX, t.clientY);
     if (pos != null) {
       down(pos, true);
     }
@@ -213,10 +214,6 @@ $$.Keyboard.prototype.installClickHandler = function() {
     if (!self.mobileDetected) {
       up(e.shiftKey);
     }
-  });
-
-  jQuery(window).on('touchend', e => {
-    up(true);
   });
 
   jQuery(window).keyup(e => {
