@@ -30,6 +30,13 @@ $$.EventSwitcher = function() {
   };
 };
 
+$$.mergeEvent = function(e1, e2) {
+  var event = $$.Event();
+  return {
+    listen: cb => { e1.listen(cb); e2.listen(cb); }
+  };
+};
+
 $$.MIDIInput = function(indev) {
   this.event = $$.Event();
   this.widget = $('<span>').text(indev.name)[0];
@@ -152,14 +159,24 @@ $$.IOSelector = function() {
   var passThru = $('<input>').attr('type', 'checkbox').prop('checked', true);
   var input = new $$.InputSelector();
   var output = new $$.OutputSelector();
-  this.event = input.event;
+
+  var replayevent = $$.Event();
+
+  var replay = $('<button>').addClass('replay').text('Hear Again').click(() => {
+    replayevent.fire([0x90, 108, 96]);
+    setTimeout(() => { replayevent.fire([0x90, 108, 0]) }, 100);;
+  });
+
+  this.event = $$.mergeEvent(input.event, replayevent);
   this.send = dat => output.send(dat);
   this.widget = $('<div>').append(
+    replay,
     input.widget,
     $('<div>').append($('<span>').text('THRU'), passThru),
     output.widget);
 
   this.event.listen(dat => {
+    if (dat[1] == 108) return;  // HACK, don't sound replay
     if (passThru.prop('checked')) {
       output.send(dat);
     }
