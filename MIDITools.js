@@ -36,7 +36,7 @@ $$.MIDIInput = function(indev) {
   this.name = indev.name;
   var event = this.event;
 
-  indev.onmidimessage = msg => event.fire(msg);  // I don't understand `this` scoping well enough to inline `event`
+  indev.onmidimessage = msg => event.fire(msg.data);  // I don't understand `this` scoping well enough to inline `event`
 };
 
 $$.KeyboardInput = function() {
