@@ -2,17 +2,28 @@ Keyboard = function(jQuery) {
 
 var $$ = {};
 
-$$.Keyboard = function(canvas, overlay, startKey, endKey, midicallback) {
-  this.canvas = canvas;
-  this.overlay = overlay;
+$$.Keyboard = function(width, height, startKey, endKey, midicallback) {
+  this.canvas = jQuery('<canvas>')
+      .attr('width', width)
+      .attr('height', height)
+      .css('position', 'absolute')
+      .css('z-index', 0)[0];
+  this.overlay = jQuery('<canvas>')
+      .attr('width', width)
+      .attr('height', height)
+      .css('position', 'absolute')
+      .css('z-index', 1)[0];
+  this.container = jQuery('<div>')
+      .css('position', 'relative')
+      .append(this.canvas, this.overlay)[0];
 
   this.startKey = startKey;
   this.endKey = endKey;
 
   this.callback = midicallback || (() => { });
 
-  this.octaves = Math.ceil(endKey/12) - Math.floor(startKey/12);
-  this.keyWidth = canvas.width / (7*this.octaves);
+  var octaves = Math.ceil(endKey/12) - Math.floor(startKey/12);
+  this.keyWidth = width / (7*octaves);
 
   this.playingNotes = [];
 };

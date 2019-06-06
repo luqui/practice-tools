@@ -8,30 +8,16 @@
       $(function() {
         synth = new (Synth(Tone).Synth)();
 
-        var kb = new (Keyboard($).Keyboard)($('#canvas')[0], $('#overlay')[0], 36, 72, e => synth.send(e));
+        var kb = new (Keyboard($).Keyboard)(600, 200, 36, 72, e => synth.send(e));
+        $('#viewport').append(kb.container);
+
         kb.installClickHandler();
         kb.draw();
       });
     </script>
-    <style>
-      #viewport {
-        position: relative;
-      }
-      #viewport canvas {
-        position: absolute;
-      }
-      #overlay {
-        z-index: 1;
-      }
-      #canvas {
-        z-index: 0;
-      }
-    </style>
   </head>
   <body>
     <div id="viewport">
-      <canvas id="overlay" width="600"> </canvas>
-      <canvas id="canvas" width="600"> </canvas>
     </div>
   </body>
 </html>
