@@ -160,9 +160,9 @@ hasIndex 0 _ = True
 hasIndex n (_:xs) = hasIndex (n-1) xs
 
 scoredGame :: Connections -> [[[Int]]] -> JS.JSM Int
-scoredGame conns = go (ScoreStats 0 0 Map.empty 4)
+scoredGame conns exes = drainInput conns >> go (ScoreStats 0 0 Map.empty 4)
     where
-    go score exes 
+    go score
       | ssLives score == 0 = showStats score >> pure (ssScore score)
       | not (hasIndex (ssScore score) exes) = JS.eval "console.log('Done')" >> showStats score >> pure (ssScore score)
       | otherwise = do
@@ -180,7 +180,7 @@ scoredGame conns = go (ScoreStats 0 0 Map.empty 4)
                                       | winround -> ssLives score
                                       | otherwise -> ssLives score - 1
                        }
-        go score' exes
+        go score' 
     
     addDebt x Nothing | x > 0 = Just x
     addDebt x (Just y) | x + y > 0 = Just (x+y)
@@ -227,6 +227,13 @@ chordGame = mapM pickChord (concatMap (replicate 3) [50..71])
         let normalize n = (n `mod` 12) + range0
         pure [map (normalize . (+ basenote)) quality]
 
+
+drainInput :: Connections -> JS.JSM ()
+drainInput conns = do
+    e <- getNextEvent conns
+    case e of
+        Just _ -> drainInput conns
+        Nothing -> pure ()
 
 listenChord :: Connections -> JS.JSM (Set.Set Int)
 listenChord (src, dest) = listenOn Set.empty
