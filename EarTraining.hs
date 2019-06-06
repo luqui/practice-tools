@@ -66,7 +66,7 @@ challenges :: [(String, Connections -> JS.JSM Int)]
 challenges = 
     [ "row game" --> game rowGame
     , "giant steps" --> game giantStepsGame
-    , "random walk" --> game randomWalkGame
+    , "random walk" --> (\conns -> scoredGame conns False =<< evalRandJS randomWalkGame)
     , "triads" --> game triadGame
     , "tetrachords" --> game tetrachordGame
     , "'melody' and bass" --> game intervalGame
@@ -74,7 +74,7 @@ challenges =
     ]
     where
     (-->) = (,)
-    game g conns = scoredGame conns =<< evalRandJS g
+    game g conns = scoredGame conns True =<< evalRandJS g
 
 
 
@@ -165,8 +165,8 @@ hasIndex _ [] = False
 hasIndex 0 _ = True
 hasIndex n (_:xs) = hasIndex (n-1) xs
 
-scoredGame :: Connections -> [[[Int]]] -> JS.JSM Int
-scoredGame conns exes = drainInput conns >> go (ScoreStats 0 0 Map.empty 4)
+scoredGame :: Connections -> Bool -> [[[Int]]] -> JS.JSM Int
+scoredGame conns debtq exes = drainInput conns >> go (ScoreStats 0 0 Map.empty 4)
     where
     go score
       | ssLives score == 0 = showStats score >> pure (ssScore score)
@@ -175,7 +175,7 @@ scoredGame conns exes = drainInput conns >> go (ScoreStats 0 0 Map.empty 4)
         showStats score
         threadDelay 500000
 
-        (gameround,adv) <- evalRandJS . Rand.weighted $ ((exes !! ssScore score, True), 10) : [ ((ex, False), fromIntegral w) | (ex,w) <- Map.assocs (ssDebt score), w > 0 ]
+        (gameround,adv) <- evalRandJS . Rand.weighted $ ((exes !! ssScore score, True), 10) : [ ((ex, False), fromIntegral w) | (ex,w) <- Map.assocs (ssDebt score), w > 0, debtq ]
         winround <- sequenceRound conns gameround
         let score' = ScoreStats
                        { ssScore = if winround && adv then ssScore score + 1 else ssScore score
