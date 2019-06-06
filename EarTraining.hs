@@ -7,7 +7,7 @@ import Data.List (isPrefixOf, tails, delete, nub, sort, sortBy)
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import Control.Concurrent (threadDelay)
-import Control.Monad (forM_, void, when)
+import Control.Monad (forM_, void, when, join)
 import Control.Monad.IO.Class (liftIO)
 import qualified Control.Monad.Random as Rand
 import Data.Ord (comparing)
@@ -115,7 +115,7 @@ chunkerleave n ([]:xss) = chunkerleave n xss
 chunkerleave n (xs:xss) = take n xs ++ chunkerleave n (xss ++ [drop n xs])
 
 scale :: Int -> Cloud [Int]
-scale baseNote = Rand.uniform . concatMap (\s -> [s, map (subtract 12) (reverse s)]) . map (scanl (+) baseNote) . concat $ 
+scale baseNote = Rand.uniform . map (scanl (+) baseNote) . concat $ 
                     [ take 7 . map (take 7) . tails . cycle $ major, take 7 . map (take 7) . tails . cycle $ melodic ]
     where
     major = [2,2,1,2,2,2,1]
@@ -192,12 +192,18 @@ scoredGame conns exes = drainInput conns >> go (ScoreStats 0 0 Map.empty 4)
     addDebt _ _ = Nothing
 
 scaleGame :: Cloud [[[Int]]]
-scaleGame = mapM pickScale [60..]
+scaleGame = mapM (\b -> join (Rand.uniform [pickScale b, pickScaleRev b])) [48..71]
     where
     pickScale baseNote = do 
         s <- scale baseNote
-        s' <- scale (last s)
-        pure $ map (:[]) (s <> tail s') 
+        s' <- scale baseNote
+        pure $ map (:[]) (s <> tail (reverse s'))
+
+    pickScaleRev baseNote = do
+        s <- scale baseNote
+        s' <- scale baseNote
+        pure $ map (:[]) (reverse s <> tail s')
+ 
 
 intervalGame :: Cloud [[[Int]]]
 intervalGame = mapM pickPair (concatMap (replicate 3) [50..71])
