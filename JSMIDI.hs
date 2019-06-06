@@ -18,7 +18,7 @@ newtype Output = Output { sendEvent :: Event -> JSM () }
 
 makeInterface :: JSM (Input, Output)
 makeInterface = do
-    tools <- jsg1 "JSTools" =<< jsg "jQuery"
+    tools <- jsg1 "MIDITools" =<< jsg "jQuery"
     midi <- tools # "MIDIInterface" $ ()
     void $ (jsg1 "jQuery" =<< (jsg "document" ! "body")) # "append" $ (midi ! "widget")
     

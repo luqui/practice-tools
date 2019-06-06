@@ -1,4 +1,4 @@
-JSTools = function($) {
+MIDITools = function($) {
 
 var $$ = {};
 
