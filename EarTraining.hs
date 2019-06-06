@@ -64,8 +64,8 @@ rowGame = do
 
 challenges :: [(String, Connections -> JS.JSM Int)]
 challenges = 
-    [ "giant steps" --> game giantStepsGame
-    , "row game" --> game rowGame
+    [ "row game" --> game rowGame
+    , "giant steps" --> game giantStepsGame
     , "triads" --> game triadGame
     , "tetrachords" --> game tetrachordGame
     , "'melody' and bass" --> game intervalGame
