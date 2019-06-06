@@ -34,6 +34,9 @@ shuffle xs = do
 choose :: Int -> [a] -> Cloud [a]
 choose n xs = take n <$> shuffle xs
 
+giantStepsGame :: Cloud [[[Int]]]
+giantStepsGame = (fmap.fmap) (\x -> [[x]]) $ sequenceA (repeat (Rand.uniform [36..71]))
+
 rowGame :: Cloud [[[Int]]]
 rowGame = do
     baseNote <- Rand.uniform [36..71]
@@ -61,8 +64,10 @@ rowGame = do
 
 challenges :: [(String, Connections -> JS.JSM Int)]
 challenges = 
-    [ "row game" --> game rowGame
-    , "tetrachords" --> game chordGame
+    [ "giant steps" --> game giantStepsGame
+    , "row game" --> game rowGame
+    , "triads" --> game triadGame
+    , "tetrachords" --> game tetrachordGame
     , "'melody' and bass" --> game intervalGame
     , "modal scale pairs" --> game scaleGame
     ]
@@ -202,30 +207,41 @@ intervalGame = mapM pickPair (concatMap (replicate 3) [50..71])
         topnote <- Rand.uniform [range0..range0+12]
         pure [[bass, topnote]]
 
-chordGame :: Cloud [[[Int]]]
-chordGame = mapM pickChord (concatMap (replicate 3) [50..71])
+genChordGame :: [[Int]] -> Cloud [[[Int]]]
+genChordGame chords = mapM pickChord (concatMap (replicate 3) [50..71])
     where
     pickChord range0 = do
         basenote <- Rand.uniform [0..11]
-        quality <- Rand.uniform
-            [ [ 0, 4, 7 ]  -- maj
-            , [ 0, 3, 7 ]  -- min
-            , [ 0, 3, 6 ]  -- dim
-            , [ 0, 4, 8 ]  -- aug
-            , [ 0, 4, 7, 11 ]  -- maj7
-            , [ 0, 4, 7, 10 ]  -- 7
-            --, [ 0, 4, 6, 11 ]  -- maj7 b5
-            --, [ 0, 4, 6, 10 ]  -- 7 b5
-            , [ 0, 3, 7, 11 ]  -- maj min
-            , [ 0, 3, 7, 11 ]  -- maj min b5
-            , [ 0, 3, 7, 10 ]  -- min 7
-            --, [ 0, 3, 6, 10 ]  -- min 7 b5
-            , [ 0, 3, 6, 9  ]  -- dim7
-            --, [ 0, 4, 8, 11 ]  -- maj7 #5
-            --, [ 0, 4, 8, 10 ]  -- +7
-            ]
+        quality <- Rand.uniform chords
         let normalize n = (n `mod` 12) + range0
         pure [map (normalize . (+ basenote)) quality]
+
+triadGame :: Cloud [[[Int]]]
+triadGame = genChordGame
+                [ [ 0, 3, 6 ]  -- dim
+                , [ 0, 3, 7 ]  -- min
+                , [ 0, 4, 7 ]  -- maj
+                , [ 0, 4, 8 ]  -- aug
+                ]
+
+tetrachordGame :: Cloud [[[Int]]]
+tetrachordGame = genChordGame
+                     [ [ 0, 4, 7 ]  -- maj
+                     , [ 0, 3, 7 ]  -- min
+                     , [ 0, 3, 6 ]  -- dim
+                     , [ 0, 4, 8 ]  -- aug
+                     , [ 0, 4, 7, 11 ]  -- maj7
+                     , [ 0, 4, 7, 10 ]  -- 7
+                     --, [ 0, 4, 6, 11 ]  -- maj7 b5
+                     --, [ 0, 4, 6, 10 ]  -- 7 b5
+                     , [ 0, 3, 7, 11 ]  -- maj min
+                     , [ 0, 3, 7, 11 ]  -- maj min b5
+                     , [ 0, 3, 7, 10 ]  -- min 7
+                     --, [ 0, 3, 6, 10 ]  -- min 7 b5
+                     , [ 0, 3, 6, 9  ]  -- dim7
+                     --, [ 0, 4, 8, 11 ]  -- maj7 #5
+                     --, [ 0, 4, 8, 10 ]  -- +7
+                     ]
 
 
 drainInput :: Connections -> JS.JSM ()
