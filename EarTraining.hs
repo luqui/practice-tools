@@ -158,6 +158,10 @@ showStats stats = do
     where
     showlives | ssLives stats == 0 = "Game Over"
               | otherwise = show (ssLives stats)
+
+showWin :: JS.JSM ()
+showWin = do
+    void $ jquery "#lives" JS.# "text" $ ["You Win"]
     
 
 hasIndex :: Int -> [a] -> Bool
@@ -170,7 +174,7 @@ scoredGame conns debtq exes = drainInput conns >> go (ScoreStats 0 0 Map.empty 4
     where
     go score
       | ssLives score == 0 = showStats score >> pure (ssScore score)
-      | not (hasIndex (ssScore score) exes) = JS.eval "console.log('Done')" >> showStats score >> pure (ssScore score)
+      | not (hasIndex (ssScore score) exes) = showStats score >> showWin >> pure (ssScore score)
       | otherwise = do
         showStats score
         threadDelay 500000

@@ -67,7 +67,7 @@ $$.InputSelector = function() {
   var inputs = [new $$.KeyboardInput()];
   var select = $('<select>');
   var container = $('<div>');
-  this.widget = $('<div>').append($('<h3>').text('Input:'), select, container)[0];
+  this.widget = $('<div>').append($('<b>').text('Input:'), select, container)[0];
 
   var makeSelect = () => {
     for (var i = 0; i < inputs.length; i++) {
@@ -122,7 +122,7 @@ $$.OutputSelector = function() {
   var outputs = [new $$.SynthOutput()];
   var select = $('<select>');
   var container = $('<div>');
-  this.widget = $('<div>').append($('<h3>').text('Output:'), select, container)[0];
+  this.widget = $('<div>').append($('<b>').text('Output:'), select, container)[0];
 
   var makeSelect = () => {
     for (var i = 0; i < outputs.length; i++) {

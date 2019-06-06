@@ -16,17 +16,17 @@ $$.Keyboard = function(startKey, endKey, midicallback) {
       .attr('height', height)
       .css('position', 'absolute')
       .css('z-index', 2)[0];
-  this.playButton = jQuery('<button>')
+  this.chordButton = jQuery('<button>')
       .css('width', width)
       .css('height', 100)
       .css('z-index', 0)
-      .text('Play')
+      .text('Chord')
       .css('display', 'none');
   this.container = jQuery('<div>')
       .css('position', 'relative')
       .css('width', width)
       .css('height', height+100)
-      .append(this.canvas, this.overlay, jQuery('<div>').css('height', height), this.playButton)[0];
+      .append(this.canvas, this.overlay, jQuery('<div>').css('height', height), this.chordButton)[0];
 
   this.startKey = startKey;
   this.endKey = endKey;
@@ -137,6 +137,7 @@ $$.Keyboard.prototype._transformMousePos = function(x, y) {
 
 $$.Keyboard.prototype.installClickHandler = function() {
   var self = this;
+  var chordEnabled = false;
 
   var down = function(pos, shift) {
     if (pos == null) { return; }
@@ -174,6 +175,7 @@ $$.Keyboard.prototype.installClickHandler = function() {
   
   var playChord = function() {
     var notes = self.playingNotes;
+
     self.playingNotes = [];
 
     console.log(notes);
@@ -194,26 +196,30 @@ $$.Keyboard.prototype.installClickHandler = function() {
   jQuery(self.overlay).mousedown(e => {
     var pos = self._transformMousePos(e.clientX, e.clientY);
     if (pos != null) {
-      down(pos, e.shiftKey);
+      down(pos, e.shiftKey || chordEnabled);
     }
   });
 
   jQuery(self.overlay).on('touchstart', e => {
-    self.playButton.css('display', 'block');
+    self.chordButton.css('display', 'block');
     self.mobileDetected = true;
     
     var t = e.touches[e.touches.length-1];
     var pos = self._transformMousePos(t.clientX, t.clientY);
     if (pos != null) {
-      down(pos, true);
+      down(pos, chordEnabled);
     }
     return false;  // don't propagate
   });
 
   jQuery(window).mouseup(e => {
     if (!self.mobileDetected) {
-      up(e.shiftKey);
+      up(e.shiftKey || chordEnabled);
     }
+  });
+
+  jQuery(window).on('touchend', e => {
+    up(chordEnabled);
   });
 
   jQuery(window).keyup(e => {
@@ -222,7 +228,17 @@ $$.Keyboard.prototype.installClickHandler = function() {
     }
   });
 
-  self.playButton.click(playChord);
+  self.chordButton.click(function() {
+    if (chordEnabled) {
+      self.chordButton.css('background', '');
+      chordEnabled = false;
+      playChord();
+    }
+    else {
+      self.chordButton.css('background', 'blue');
+      chordEnabled = true;
+    }
+  });
 };
 
 return $$;
