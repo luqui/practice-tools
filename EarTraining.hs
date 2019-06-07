@@ -8,7 +8,7 @@ import qualified Data.Set as Set
 import qualified Data.Map as Map
 import Control.Arrow (second)
 import Control.Concurrent (threadDelay)
-import Control.Monad (forM_, void, join)
+import Control.Monad (forM_, void, join, replicateM)
 import Control.Monad.IO.Class (liftIO)
 import qualified Control.Monad.Random as Rand
 import Data.Ord (comparing)
@@ -41,7 +41,7 @@ choose :: Int -> [a] -> Cloud [a]
 choose n xs = take n <$> shuffle xs
 
 giantStepsGame :: Cloud [[[Int]]]
-giantStepsGame = (fmap.fmap) (\x -> [[x]]) $ sequenceA (repeat (Rand.uniform [36..71]))
+giantStepsGame = (fmap.fmap) (\x -> [[x]]) $ sequenceA (replicate 100 (Rand.uniform [36..71]))
 
 rowGame :: Cloud [[[Int]]]
 rowGame = do
@@ -68,15 +68,25 @@ rowGame = do
         (pre,post) = (take (length xs `div` 2) xs, drop (length xs `div` 2) xs)
 
 
-challenges :: [(String, Connections -> JS.JSM Int)]
+challenges :: [(String, [(String, Connections -> JS.JSM Int)])]
 challenges = 
-    [ "row game" --> game rowGame
-    , "giant steps" --> game giantStepsGame
-    , "random walk" --> (\conns -> scoredGame conns False =<< evalRandJS randomWalkGame)
-    , "triads" --> game triadGame
-    , "tetrachords" --> game tetrachordGame
-    , "'melody' and bass" --> game intervalGame
-    , "modal scale pairs" --> game scaleGame
+    [ "melody" -->
+        [ "row game" --> game rowGame
+        , "random walk" --> (\conns -> scoredGame conns False =<< evalRandJS randomWalkGame) ]
+    , "intervals" -->
+        [ "giant steps" --> game giantStepsGame
+        , "bass and lead" --> game intervalGame
+        ]
+    , "chords" -->
+        [ "triads" --> game triadGame
+        , "rooted tetrachords" --> game (rootedChordGame allTetrachordTypes)
+        , "topped tetrachords" --> game (toppedChordGame allTetrachordTypes)
+        , "tridas + common tetrachords" --> game (genChordGame (triadTypes ++ commonTetrachordTypes))
+        , "all chords"    --> game (genChordGame allTetrachordTypes)
+        ]
+    , "scales" -->
+        [ "modal scale pairs" --> game scaleGame
+        ]
     ]
     where
     (-->) = (,)
@@ -102,33 +112,34 @@ main = do
     where
     refreshGames newhiscores conns = do
         void $ jquery "#games" JS.# "empty" $ ()
-        forM_ challenges $ \(name, code) -> do
-            let cookiename = name ++ " hiscore"
-            hiscore <- fmap (maybe (0 :: Int, 0 :: Int) id . (maybeRead =<<)) . JS.fromJSVal =<< (JS.jsg "jQuery" JS.# "cookie" $ [cookiename])
-            button <- jquery "<button>" JS.# "text" $ ["Play"]
-            void $ button JS.# "click" $ JS.fun \_ _ _ -> do
-                void $ button JS.# "prop" $ ("disabled", True)
-                time0 <- getCurrentTime
-                score <- code conns
-                time1 <- getCurrentTime
-                let timediff = round (realToFrac (time1 `diffUTCTime` time0) :: Double)
-                void $ button JS.# "prop" $ ("disabled", False)
+        forM_ challenges $ \(category, games) -> do
+            catlist <- jquery "<ul>"
+            void $ jquery "#games" JS.# "append" $ (jquery "<li>" JS.# "text" $ [category], catlist)
+            forM_ games $ \(name, code) -> do
+                let cookiename = name ++ " hiscore"
+                hiscore <- fmap (maybe (0 :: Int, 0 :: Int) id . (maybeRead =<<)) . JS.fromJSVal =<< (JS.jsg "jQuery" JS.# "cookie" $ [cookiename])
+                button <- jquery "<a href=\"#\">" JS.# "text" $ [name]
+                void $ button JS.# "click" $ JS.fun \_ _ _ -> do
+                    void $ button JS.# "prop" $ ("disabled", True)
+                    time0 <- getCurrentTime
+                    score <- code conns
+                    time1 <- getCurrentTime
+                    let timediff = round (realToFrac (time1 `diffUTCTime` time0) :: Double)
+                    void $ button JS.# "prop" $ ("disabled", False)
 
-                if (score, -timediff) > second negate hiscore then do
-                    opts <- JS.eval "({ expires: 365 })"
-                    void $ JS.jsg "jQuery" JS.# "cookie" $ (cookiename, show (score, timediff), opts)
-                    refreshGames (cookiename:newhiscores) conns
+                    if (score, -timediff) > second negate hiscore then do
+                        opts <- JS.eval "({ expires: 365 })"
+                        void $ JS.jsg "jQuery" JS.# "cookie" $ (cookiename, show (score, timediff), opts)
+                        refreshGames (cookiename:newhiscores) conns
+                    else
+                        refreshGames newhiscores conns
+
+                scoremark <- if hiscore == (0,0) then
+                    jquery "<span>"
                 else
-                    refreshGames newhiscores conns
-
-            scoremark <- if hiscore == (0,0) then
-                jquery "<span>"
-            else
-                (jquery "<span>" JS.# "addClass" $ [if cookiename `elem` newhiscores then "newHiScore" else "hiScore"])
-                        JS.# "text" $ [" (" ++ show (fst hiscore) ++ " @ " ++ show (snd hiscore) ++ "s)"]
-            jquery "#games" JS.# "append" $ ((jquery "<li>" JS.# "text" $ [name])
-                                                            JS.# "append" $ scoremark)
-                                                            JS.# "append" $ button
+                    (jquery "<span>" JS.# "addClass" $ [if cookiename `elem` newhiscores then "newHiScore" else "hiScore"])
+                            JS.# "text" $ [" (" ++ show (fst hiscore) ++ " @ " ++ show (snd hiscore) ++ "s)"]
+                catlist JS.# "append" $ ((jquery "<li>" JS.# "append" $ button) JS.# "append" $ scoremark)
 
 scale :: Int -> Cloud [Int]
 scale baseNote = Rand.uniform . map (scanl (+) baseNote) . concat $ 
@@ -254,32 +265,44 @@ genChordGame chords = mapM pickChord (concatMap (replicate 3) [50..71])
         let normalize n = (n `mod` 12) + range0
         pure [map (normalize . (+ basenote)) quality]
 
-triadGame :: Cloud [[[Int]]]
-triadGame = genChordGame
-                [ [ 0, 3, 6 ]  -- dim
-                , [ 0, 3, 7 ]  -- min
-                , [ 0, 4, 7 ]  -- maj
-                , [ 0, 4, 8 ]  -- aug
-                ]
+triadTypes :: [[Int]]
+triadTypes = [ [ 0, 3, 6 ]  -- dim
+             , [ 0, 3, 7 ]  -- min
+             , [ 0, 4, 7 ]  -- maj
+             , [ 0, 4, 8 ]  -- aug
+             ]
 
-tetrachordGame :: Cloud [[[Int]]]
-tetrachordGame = genChordGame
-                     [ [ 0, 4, 7 ]  -- maj
-                     , [ 0, 3, 7 ]  -- min
-                     , [ 0, 3, 6 ]  -- dim
-                     , [ 0, 4, 8 ]  -- aug
-                     , [ 0, 4, 7, 11 ]  -- maj7
-                     , [ 0, 4, 7, 10 ]  -- 7
-                     --, [ 0, 4, 6, 11 ]  -- maj7 b5
-                     --, [ 0, 4, 6, 10 ]  -- 7 b5
-                     , [ 0, 3, 7, 11 ]  -- maj min
-                     , [ 0, 3, 7, 11 ]  -- maj min b5
-                     , [ 0, 3, 7, 10 ]  -- min 7
-                     --, [ 0, 3, 6, 10 ]  -- min 7 b5
-                     , [ 0, 3, 6, 9  ]  -- dim7
-                     --, [ 0, 4, 8, 11 ]  -- maj7 #5
-                     --, [ 0, 4, 8, 10 ]  -- +7
-                     ]
+commonTetrachordTypes :: [[Int]]
+commonTetrachordTypes = [ [ 0, 4, 7, 11 ]  -- maj7
+                        , [ 0, 4, 7, 10 ]  -- 7
+                        , [ 0, 3, 7, 11 ]  -- maj min
+                        , [ 0, 3, 7, 11 ]  -- maj min b5
+                        , [ 0, 3, 7, 10 ]  -- min 7
+                        , [ 0, 3, 6, 9  ]  -- dim7
+                        ]
+
+allTetrachordTypes :: [[Int]]
+allTetrachordTypes = [ [ 0, third, fifth, seventh ] | third <- [3,4], fifth <- [6,7,8], seventh <- [9,10,11] ]
+
+triadGame :: Cloud [[[Int]]]
+triadGame = genChordGame triadTypes
+
+
+rootedChordGame :: [[Int]] -> Cloud [[[Int]]]
+rootedChordGame chordTypes = Rand.uniform [36..71] >>= \baseNote -> replicateM 66 ((:[]) <$> pickChord baseNote)
+    where
+    pickChord baseNote = do
+        chtype <- Rand.uniform chordTypes
+        root <- Rand.uniform chtype
+        pure $ map (\x -> (x - root) `mod` 12 + baseNote) chtype
+    
+toppedChordGame :: [[Int]] -> Cloud [[[Int]]]
+toppedChordGame chordTypes = Rand.uniform [36..71] >>= \baseNote -> replicateM 66 ((:[]) <$> pickChord baseNote)
+    where
+    pickChord baseNote = do
+        chtype <- Rand.uniform chordTypes
+        root <- Rand.uniform chtype
+        pure $ map (\x -> (x - root - 1) `mod` 12 + 1 + baseNote) chtype
 
 
 drainInput :: Connections -> JS.JSM ()
