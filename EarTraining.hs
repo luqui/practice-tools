@@ -5,7 +5,6 @@ import Prelude hiding (seq)
 import qualified JSMIDI as MIDI
 import Data.List (isPrefixOf, tails, delete, nub, sort, sortBy)
 import qualified Data.Set as Set
-import qualified Data.Map as Map
 import Control.Arrow (second)
 import Control.Concurrent (threadDelay)
 import Control.Monad (forM_, void, join, replicateM)
@@ -72,13 +71,15 @@ challenges :: [(String, [(String, Connections -> JS.JSM Int)])]
 challenges = 
     [ "melody" -->
         [ "row game" --> game rowGame
-        , "random walk" --> (\conns -> scoredGame conns False =<< evalRandJS randomWalkGame) ]
+        , "random walk" --> (\conns -> scoredGame conns =<< evalRandJS randomWalkGame) ]
     , "intervals" -->
         [ "giant steps" --> game giantStepsGame
         , "bass and lead" --> game intervalGame
         ]
     , "chords" -->
         [ "triads" --> game triadGame
+        , "rooted tetrachords (arpeggiated)" --> game (addArpeggiations <$> rootedChordGame allTetrachordTypes)
+        , "topped tetrachords (arpeggiated)" --> game (addArpeggiations <$> toppedChordGame allTetrachordTypes)
         , "rooted tetrachords" --> game (rootedChordGame allTetrachordTypes)
         , "topped tetrachords" --> game (toppedChordGame allTetrachordTypes)
         , "tridas + common tetrachords" --> game (genChordGame (triadTypes ++ commonTetrachordTypes))
@@ -90,7 +91,7 @@ challenges =
     ]
     where
     (-->) = (,)
-    game g conns = scoredGame conns True =<< evalRandJS g
+    game g conns = scoredGame conns =<< evalRandJS g
 
 
 
@@ -172,7 +173,6 @@ sequenceRound (src,dest) chords = do
 data ScoreStats = ScoreStats
     { ssScore :: Int
     , ssRunLength :: Int
-    , ssDebt :: Map.Map [[Int]] Int
     , ssLives :: Int
     }
 
@@ -195,8 +195,8 @@ hasIndex _ [] = False
 hasIndex 0 _ = True
 hasIndex n (_:xs) = hasIndex (n-1) xs
 
-scoredGame :: Connections -> Bool -> [[[Int]]] -> JS.JSM Int
-scoredGame conns debtq exes = drainInput conns >> go (ScoreStats 0 0 Map.empty 4)
+scoredGame :: Connections -> [[[Int]]] -> JS.JSM Int
+scoredGame conns exes = drainInput conns >> go (ScoreStats 0 0 4)
     where
     go score
       | ssLives score == 0 = showStats score >> pure (ssScore score)
@@ -205,23 +205,17 @@ scoredGame conns debtq exes = drainInput conns >> go (ScoreStats 0 0 Map.empty 4
         showStats score
         threadDelay 500000
 
-        (gameround,adv) <- evalRandJS . Rand.weighted $ ((exes !! ssScore score, True), 10) : [ ((ex, False), fromIntegral w) | (ex,w) <- Map.assocs (ssDebt score), w > 0, debtq ]
+        let gameround = exes !! ssScore score
         winround <- sequenceRound conns gameround
         let score' = ScoreStats
-                       { ssScore = if winround && adv then ssScore score + 1 else ssScore score
+                       { ssScore = if winround then ssScore score + 1 else ssScore score
                        , ssRunLength = if winround then ssRunLength score + 1 else 0
-                       , ssDebt = if winround then Map.alter (addDebt (-1)) gameround (ssDebt score)
-                                              else Map.alter (addDebt 2) gameround (ssDebt score)
                        , ssLives = if | winround && (ssRunLength score `mod` 10) == 9 -> ssLives score + 1
                                       | winround -> ssLives score
                                       | otherwise -> ssLives score - 1
                        }
         go score' 
     
-    addDebt x Nothing | x > 0 = Just x
-    addDebt x (Just y) | x + y > 0 = Just (x+y)
-    addDebt _ _ = Nothing
-
 randomWalkGame :: Cloud [[[Int]]]
 randomWalkGame = fmap ((map.map) (:[]) . takes (replicate 3 =<< [1..])) . walk =<< Rand.uniform [36..83]
     where
@@ -287,22 +281,27 @@ allTetrachordTypes = [ [ 0, third, fifth, seventh ] | third <- [3,4], fifth <- [
 triadGame :: Cloud [[[Int]]]
 triadGame = genChordGame triadTypes
 
+addArpeggiations :: [[[Int]]] -> [[[Int]]]
+addArpeggiations = concatMap (\ex -> [arp ex, ex])
+    where
+    arp [ch] = map (:[]) ch
+    arp x = x
 
 rootedChordGame :: [[Int]] -> Cloud [[[Int]]]
-rootedChordGame chordTypes = Rand.uniform [36..71] >>= \baseNote -> replicateM 66 ((:[]) <$> pickChord baseNote)
+rootedChordGame chordTypes = Rand.uniform [48..71] >>= \baseNote -> replicateM 66 ((:[]) <$> pickChord baseNote)
     where
     pickChord baseNote = do
         chtype <- Rand.uniform chordTypes
         root <- Rand.uniform chtype
-        pure $ map (\x -> (x - root) `mod` 12 + baseNote) chtype
+        pure $ sort $ map (\x -> (x - root) `mod` 12 + baseNote) chtype
     
 toppedChordGame :: [[Int]] -> Cloud [[[Int]]]
-toppedChordGame chordTypes = Rand.uniform [36..71] >>= \baseNote -> replicateM 66 ((:[]) <$> pickChord baseNote)
+toppedChordGame chordTypes = Rand.uniform [48..71] >>= \baseNote -> replicateM 66 ((:[]) <$> pickChord baseNote)
     where
     pickChord baseNote = do
         chtype <- Rand.uniform chordTypes
         root <- Rand.uniform chtype
-        pure $ map (\x -> (x - root - 1) `mod` 12 + 1 + baseNote) chtype
+        pure $ reverse . sort $ map (\x -> (x - root - 1) `mod` 12 + 1 + baseNote) chtype
 
 
 drainInput :: Connections -> JS.JSM ()
