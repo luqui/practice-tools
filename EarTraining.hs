@@ -6,16 +6,22 @@ import qualified JSMIDI as MIDI
 import Data.List (isPrefixOf, tails, delete, nub, sort, sortBy)
 import qualified Data.Set as Set
 import qualified Data.Map as Map
+import Control.Arrow (second)
 import Control.Concurrent (threadDelay)
-import Control.Monad (forM_, void, when, join)
+import Control.Monad (forM_, void, join)
 import Control.Monad.IO.Class (liftIO)
 import qualified Control.Monad.Random as Rand
 import Data.Ord (comparing)
+import Data.Time.Clock (getCurrentTime, diffUTCTime)
 import qualified Language.Javascript.JSaddle as JS
 
 type Cloud = Rand.Rand Rand.StdGen
 type Connections = (MIDI.Input, MIDI.Output)
 
+maybeRead :: (Read a) => String -> Maybe a
+maybeRead s
+    | [(x,"")] <- reads s = Just x
+    | otherwise = Nothing
 
 getConn :: JS.JSM Connections
 getConn = MIDI.makeInterface
@@ -79,9 +85,6 @@ challenges =
 
 
 
-fanCloud :: Cloud a -> Cloud a
-fanCloud m = Rand.evalRand m <$> Rand.getSplit
-
 evalRandJS :: Cloud a -> JS.JSM a
 evalRandJS = liftIO . Rand.evalRandIO
 
@@ -94,26 +97,38 @@ jquery query = do
 main :: JS.JSM ()
 main = do
     conns <- getConn
+    refreshGames [] conns
     
-    forM_ challenges $ \(name, code) -> do
-        let cookiename = name ++ " hiscore"
-        hiscore <- fmap (maybe 0 id) . JS.fromJSVal =<< (JS.jsg "jQuery" JS.# "cookie" $ [cookiename])
-        button <- jquery "<button>" JS.# "text" $ ["Play"]
-        void $ button JS.# "click" $ JS.fun \_ _ _ -> do
-            void $ button JS.# "prop" $ ("disabled", True)
-            score <- code conns
-            void $ button JS.# "prop" $ ("disabled", False)
+    where
+    refreshGames newhiscores conns = do
+        void $ jquery "#games" JS.# "empty" $ ()
+        forM_ challenges $ \(name, code) -> do
+            let cookiename = name ++ " hiscore"
+            hiscore <- fmap (maybe (0 :: Int, 0 :: Int) id . (maybeRead =<<)) . JS.fromJSVal =<< (JS.jsg "jQuery" JS.# "cookie" $ [cookiename])
+            button <- jquery "<button>" JS.# "text" $ ["Play"]
+            void $ button JS.# "click" $ JS.fun \_ _ _ -> do
+                void $ button JS.# "prop" $ ("disabled", True)
+                time0 <- getCurrentTime
+                score <- code conns
+                time1 <- getCurrentTime
+                let timediff = round (realToFrac (time1 `diffUTCTime` time0) :: Double)
+                void $ button JS.# "prop" $ ("disabled", False)
 
-            when (score > hiscore) $ do
-                opts <- JS.eval "({ expires: 365 })"
-                void $ JS.jsg "jQuery" JS.# "cookie" $ (cookiename, score, opts)
-        jquery "#games" JS.# "append" $ (jquery "<li>" JS.# "text" $ [name ++ " (" ++ show hiscore ++ ")"])
-                                                       JS.# "append" $ button
+                if (score, -timediff) > second negate hiscore then do
+                    opts <- JS.eval "({ expires: 365 })"
+                    void $ JS.jsg "jQuery" JS.# "cookie" $ (cookiename, show (score, timediff), opts)
+                    refreshGames (cookiename:newhiscores) conns
+                else
+                    refreshGames newhiscores conns
 
-chunkerleave :: Int -> [[a]] -> [a]
-chunkerleave _ [] = []
-chunkerleave n ([]:xss) = chunkerleave n xss
-chunkerleave n (xs:xss) = take n xs ++ chunkerleave n (xss ++ [drop n xs])
+            scoremark <- if hiscore == (0,0) then
+                jquery "<span>"
+            else
+                (jquery "<span>" JS.# "addClass" $ [if cookiename `elem` newhiscores then "newHiScore" else "hiScore"])
+                        JS.# "text" $ [" (" ++ show (fst hiscore) ++ " @ " ++ show (snd hiscore) ++ "s)"]
+            jquery "#games" JS.# "append" $ ((jquery "<li>" JS.# "text" $ [name])
+                                                            JS.# "append" $ scoremark)
+                                                            JS.# "append" $ button
 
 scale :: Int -> Cloud [Int]
 scale baseNote = Rand.uniform . map (scanl (+) baseNote) . concat $ 
