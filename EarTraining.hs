@@ -98,6 +98,9 @@ challenges =
     , "scales" -->
         [ "modal scale pairs" --> game scaleGame
         ]
+    , "perfect pitch" -->
+        [ "masked pitch" --> game perfectPitchGame
+        ]
     ]
     where
     (-->) = (,)
@@ -218,7 +221,7 @@ scoredGame conns exes = drainInput conns >> go (ScoreStats 0 0 4)
         let gameround = exes !! ssScore score
         winround <- sequenceRound conns gameround
         let score' = ScoreStats
-                       { ssScore = if winround then ssScore score + 1 else ssScore score
+                       { ssScore = ssScore score + 1
                        , ssRunLength = if winround then ssRunLength score + 1 else 0
                        , ssLives = if | winround && (ssRunLength score `mod` 10) == 9 -> ssLives score + 1
                                       | winround -> ssLives score
@@ -312,6 +315,38 @@ toppedChordGame chordTypes = Rand.uniform [48..71] >>= \baseNote -> replicateM 6
         chtype <- Rand.uniform chordTypes
         root <- Rand.uniform chtype
         pure $ toRound . (:[]) . reverse . sort $ map (\x -> (x - root - 1) `mod` 12 + 1 + baseNote) chtype
+
+perfectPitchGame :: Cloud [Round]
+perfectPitchGame = replicateM 66 getRound
+    where
+    randomChord :: Int -> Cloud [Int]
+    randomChord center = do
+        baseNote <-  Rand.uniform [0..11]
+        let notes = [baseNote, baseNote+4, baseNote+7]
+        return $ map (((center - 6) +) . (`mod` 12)) notes
+
+    random251 :: Int -> Cloud [[Int]]
+    random251 center = do
+        baseNote <- Rand.uniform [0..11]
+        let noteses = [ [baseNote+2, baseNote+5, baseNote+9]
+                      , [baseNote+2, baseNote+5, baseNote+7, baseNote+11]
+                      , [baseNote, baseNote+4, baseNote+7]
+                      ]
+        return $ (map.map) (((center - 6) +) . (`mod` 12)) noteses
+
+    randomInterval :: Cloud [Int]
+    randomInterval = sequenceA [ Rand.uniform [36..83], Rand.uniform [36..83] ]
+
+    randomMask :: Int -> Cloud [[Int]]
+    randomMask center = concat <$> sequenceA [ replicateM 4 ((:[]) <$> Rand.uniform [36..83])
+                                             , replicateM 4 randomInterval
+                                             , concat <$> replicateM 2 ((:) <$> randomChord center <*> random251 center)]
+
+    getRound :: Cloud Round
+    getRound = do
+        note <- Rand.uniform [36..83]
+        mask <- randomMask note
+        pure $ Round (mask ++ [[note]]) [[note]]
 
 
 drainInput :: Connections -> JS.JSM ()
