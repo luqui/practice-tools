@@ -29,6 +29,7 @@ $$.Synth.prototype.noteOn = function(note) {
 
   // otherwise, allocate a new voice
   var newvoice = new Tone.Synth({ envelope: { attack: 0.01, decay: 5, sustain: 0.1, release: 1 } }).toMaster();
+  newvoice.volume = -10;
   newvoice.triggerAttack(note);
   this.voices.push({ note: note, synth: newvoice });
 };
