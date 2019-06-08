@@ -39,10 +39,17 @@ shuffle xs = do
 choose :: Int -> [a] -> Cloud [a]
 choose n xs = take n <$> shuffle xs
 
-giantStepsGame :: Cloud [[[Int]]]
-giantStepsGame = (fmap.fmap) (\x -> [[x]]) $ sequenceA (replicate 100 (Rand.uniform [36..71]))
+type Phrase = [[Int]]  -- a list of chords
 
-rowGame :: Cloud [[[Int]]]
+data Round = Round Phrase Phrase  -- challenge, request
+
+toRound :: Phrase -> Round
+toRound ph = Round ph ph
+
+giantStepsGame :: Cloud [Round]
+giantStepsGame = (fmap.fmap) (\x -> toRound [[x]]) $ sequenceA (replicate 100 (Rand.uniform [36..71]))
+
+rowGame :: Cloud [Round]
 rowGame = do
     baseNote <- Rand.uniform [36..71]
     let range = [baseNote .. baseNote + 12]
@@ -51,13 +58,16 @@ rowGame = do
     go range notes 
         | sort notes == range = pure []
         | otherwise =  
-            concat <$> sequenceA [ pure [[[head notes]]], goLine notes, goChord notes, (go range . (: notes) =<< Rand.uniform (foldr delete range notes)) ]
+            concat <$> sequenceA [ pure [toRound [[head notes]]]
+                                 , goLine notes
+                                 , goChord notes
+                                 , (go range . (: notes) =<< Rand.uniform (foldr delete range notes)) ]
 
-    goLine :: [Int] -> Cloud [[[Int]]]
-    goLine notes = nub . sortBy (comparing length) . deconstruct 3 . map (:[]) <$> shuffle notes
+    goLine :: [Int] -> Cloud [Round]
+    goLine notes = map toRound . nub . sortBy (comparing length) . deconstruct 3 . map (:[]) <$> shuffle notes
 
-    goChord :: [Int] -> Cloud [[[Int]]]
-    goChord notes = map (:[]) <$> choose 4 (combinations 3 notes)
+    goChord :: [Int] -> Cloud [Round]
+    goChord notes = map (toRound . (:[])) <$> choose 4 (combinations 3 notes)
 
     deconstruct :: Int -> [a] -> [[a]]
     deconstruct lmin xs
@@ -150,15 +160,15 @@ scale baseNote = Rand.uniform . map (scanl (+) baseNote) . concat $
     melodic = [2,1,2,2,2,2,1]
 
 
-sequenceRound :: Connections -> [[Int]] -> JS.JSM Bool
-sequenceRound (src,dest) chords = do
+sequenceRound :: Connections -> Round -> JS.JSM Bool
+sequenceRound (src,dest) (Round challenge request) = do
     let playNotes =
-            forM_ chords $ \notes -> do
+            forM_ challenge $ \notes -> do
                 forM_ notes $ \note -> MIDI.sendEvent dest $ MIDI.NoteOn 0 note 64
                 threadDelay 250000
                 forM_ notes $ \note -> MIDI.sendEvent dest $ MIDI.NoteOn 0 note 0
 
-    let expected = reverse $ map Set.fromList chords
+    let expected = reverse $ map Set.fromList request
 
     let listenSuccess history win = do
             ch <- listenChord (src,dest)
@@ -195,7 +205,7 @@ hasIndex _ [] = False
 hasIndex 0 _ = True
 hasIndex n (_:xs) = hasIndex (n-1) xs
 
-scoredGame :: Connections -> [[[Int]]] -> JS.JSM Int
+scoredGame :: Connections -> [Round] -> JS.JSM Int
 scoredGame conns exes = drainInput conns >> go (ScoreStats 0 0 4)
     where
     go score
@@ -216,8 +226,8 @@ scoredGame conns exes = drainInput conns >> go (ScoreStats 0 0 4)
                        }
         go score' 
     
-randomWalkGame :: Cloud [[[Int]]]
-randomWalkGame = fmap ((map.map) (:[]) . takes (replicate 3 =<< [1..])) . walk =<< Rand.uniform [36..83]
+randomWalkGame :: Cloud [Round]
+randomWalkGame = fmap (map (toRound . map (:[])) . takes (replicate 3 =<< [1..])) . walk =<< Rand.uniform [36..83]
     where
     walk n = do
         next <- Rand.uniform [ n + m | m <- [-2,-1,1,2], 36 <= n + m && n + m <= 83 ]
@@ -228,8 +238,8 @@ randomWalkGame = fmap ((map.map) (:[]) . takes (replicate 3 =<< [1..])) . walk =
     takes (l:ls) xs = take l xs : takes ls (drop l xs)
 
 
-scaleGame :: Cloud [[[Int]]]
-scaleGame = mapM (\b -> join (Rand.uniform [pickScale b, pickScaleRev b])) [48..71]
+scaleGame :: Cloud [Round]
+scaleGame = mapM (\b -> toRound <$> join (Rand.uniform [pickScale b, pickScaleRev b])) [48..71]
     where
     pickScale baseNote = do 
         s <- scale baseNote
@@ -242,22 +252,22 @@ scaleGame = mapM (\b -> join (Rand.uniform [pickScale b, pickScaleRev b])) [48..
         pure $ map (:[]) (reverse s <> tail s')
  
 
-intervalGame :: Cloud [[[Int]]]
+intervalGame :: Cloud [Round]
 intervalGame = mapM pickPair (concatMap (replicate 3) [50..71])
     where
     pickPair range0 = do
         bass <- Rand.uniform [36..48]
         topnote <- Rand.uniform [range0..range0+12]
-        pure [[bass, topnote]]
+        pure $ toRound [[bass, topnote]]
 
-genChordGame :: [[Int]] -> Cloud [[[Int]]]
+genChordGame :: [[Int]] -> Cloud [Round]
 genChordGame chords = mapM pickChord (concatMap (replicate 3) [50..71])
     where
     pickChord range0 = do
         basenote <- Rand.uniform [0..11]
         quality <- Rand.uniform chords
         let normalize n = (n `mod` 12) + range0
-        pure [map (normalize . (+ basenote)) quality]
+        pure . toRound $ [map (normalize . (+ basenote)) quality]
 
 triadTypes :: [[Int]]
 triadTypes = [ [ 0, 3, 6 ]  -- dim
@@ -278,30 +288,30 @@ commonTetrachordTypes = [ [ 0, 4, 7, 11 ]  -- maj7
 allTetrachordTypes :: [[Int]]
 allTetrachordTypes = [ [ 0, third, fifth, seventh ] | third <- [3,4], fifth <- [6,7,8], seventh <- [9,10,11] ]
 
-triadGame :: Cloud [[[Int]]]
+triadGame :: Cloud [Round]
 triadGame = genChordGame triadTypes
 
-addArpeggiations :: [[[Int]]] -> [[[Int]]]
+addArpeggiations :: [Round] -> [Round]
 addArpeggiations = concatMap (\ex -> [arp ex, ex])
     where
-    arp [ch] = map (:[]) ch
+    arp (Round [challenge] [request]) = Round (map (:[]) challenge) (map (:[]) request)
     arp x = x
 
-rootedChordGame :: [[Int]] -> Cloud [[[Int]]]
-rootedChordGame chordTypes = Rand.uniform [48..71] >>= \baseNote -> replicateM 66 ((:[]) <$> pickChord baseNote)
+rootedChordGame :: [[Int]] -> Cloud [Round]
+rootedChordGame chordTypes = Rand.uniform [48..71] >>= \baseNote -> replicateM 66 (pickChord baseNote)
     where
     pickChord baseNote = do
         chtype <- Rand.uniform chordTypes
         root <- Rand.uniform chtype
-        pure $ sort $ map (\x -> (x - root) `mod` 12 + baseNote) chtype
+        pure $ toRound . (:[]) . sort $ map (\x -> (x - root) `mod` 12 + baseNote) chtype
     
-toppedChordGame :: [[Int]] -> Cloud [[[Int]]]
-toppedChordGame chordTypes = Rand.uniform [48..71] >>= \baseNote -> replicateM 66 ((:[]) <$> pickChord baseNote)
+toppedChordGame :: [[Int]] -> Cloud [Round]
+toppedChordGame chordTypes = Rand.uniform [48..71] >>= \baseNote -> replicateM 66 (pickChord baseNote)
     where
     pickChord baseNote = do
         chtype <- Rand.uniform chordTypes
         root <- Rand.uniform chtype
-        pure $ reverse . sort $ map (\x -> (x - root - 1) `mod` 12 + 1 + baseNote) chtype
+        pure $ toRound . (:[]) . reverse . sort $ map (\x -> (x - root - 1) `mod` 12 + 1 + baseNote) chtype
 
 
 drainInput :: Connections -> JS.JSM ()
