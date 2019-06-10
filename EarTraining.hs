@@ -99,7 +99,9 @@ challenges =
         [ "modal scale pairs" --> game scaleGame
         ]
     , "perfect pitch" -->
-        [ "masked pitch" --> game perfectPitchGame
+        [ "masked pitch (C,E,G only)" --> game (perfectPitchGame [0,4,7])
+        , "masked pitch (white keys)" --> game (perfectPitchGame [0,2,4,5,7,9,11])
+        , "masked pitch" --> game (perfectPitchGame [0..11])
         ]
     ]
     where
@@ -316,8 +318,8 @@ toppedChordGame chordTypes = Rand.uniform [48..71] >>= \baseNote -> replicateM 6
         root <- Rand.uniform chtype
         pure $ toRound . (:[]) . reverse . sort $ map (\x -> (x - root - 1) `mod` 12 + 1 + baseNote) chtype
 
-perfectPitchGame :: Cloud [Round]
-perfectPitchGame = replicateM 66 getRound
+perfectPitchGame :: [Int] -> Cloud [Round]
+perfectPitchGame pitches = replicateM 66 getRound
     where
     randomChord :: Int -> Cloud [Int]
     randomChord center = do
@@ -344,9 +346,11 @@ perfectPitchGame = replicateM 66 getRound
 
     getRound :: Cloud Round
     getRound = do
-        note <- Rand.uniform [36..83]
-        mask <- randomMask note
-        pure $ Round (mask ++ [[note]]) [[note]]
+        octave <- Rand.uniform [36,48,60,72]
+        realpitch <- (octave +) <$> Rand.uniform pitches
+        maskpitch <- (octave +) <$> Rand.uniform [0..11]  -- don't give too much away with the mask
+        mask <- randomMask maskpitch
+        pure $ Round (mask ++ [[realpitch]]) [[realpitch]]
 
 
 drainInput :: Connections -> JS.JSM ()
