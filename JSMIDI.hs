@@ -19,6 +19,7 @@ newtype Output = Output { sendEvent :: Event -> JSM () }
 makeInterface :: JSM (Input, Output)
 makeInterface = do
     -- instantiate midi tools module, dependency injection style
+
     tools <- jsgf "MIDITools" (
         jsg "jQuery",
         jsg1 "Keyboard" =<< jsg "jQuery",

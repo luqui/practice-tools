@@ -88,15 +88,20 @@ $$.InputSelector = function() {
     dochange();
   };
 
-  navigator.requestMIDIAccess().then(access => {
-    for (var i of access.inputs.values()) {
-      inputs.push(new $$.MIDIInput(i));
-    }
+  if (navigator.requestMIDIAccess) {
+    navigator.requestMIDIAccess().then(access => {
+      for (var i of access.inputs.values()) {
+        inputs.push(new $$.MIDIInput(i));
+      }
 
-    makeSelect();
-  }, reason => {
-    makeSelect();
-  });
+      makeSelect();
+    }, reason => {
+      makeSelect();
+    });
+  }
+  else {
+    makeSelect()
+  }
 };
 
 
@@ -143,15 +148,20 @@ $$.OutputSelector = function() {
     dochange();
   };
 
-  navigator.requestMIDIAccess().then(access => {
-    for (var i of access.outputs.values()) {
-      outputs.push(new $$.MIDIOutput(i));
-    }
+  if (navigator.requestMIDIAccess) {
+    navigator.requestMIDIAccess().then(access => {
+      for (var i of access.outputs.values()) {
+        outputs.push(new $$.MIDIOutput(i));
+      }
 
+      makeSelect();
+    }, reason => {
+      makeSelect();
+    });
+  }
+  else {
     makeSelect();
-  }, reason => {
-    makeSelect();
-  });
+  }
 };
 
 
