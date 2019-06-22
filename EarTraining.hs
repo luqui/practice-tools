@@ -3,12 +3,12 @@
 
 import Prelude hiding (seq)
 import qualified JSMIDI as MIDI
-import Data.List (isPrefixOf, tails, delete, nub, sort, sortBy)
 import qualified Data.Set as Set
+import Data.List (isPrefixOf, tails, delete, nub, sort, sortBy, intercalate)
+import Control.Monad (forM_, void, join, replicateM, when)
+import Control.Monad.IO.Class (liftIO)
 import Control.Arrow (second)
 import Control.Concurrent (threadDelay)
-import Control.Monad (forM_, void, join, replicateM)
-import Control.Monad.IO.Class (liftIO)
 import qualified Control.Monad.Random as Rand
 import Data.Ord (comparing)
 import Data.Time.Clock (getCurrentTime, diffUTCTime)
@@ -41,10 +41,10 @@ choose n xs = take n <$> shuffle xs
 
 type Phrase = [[Int]]  -- a list of chords
 
-data Round = Round Phrase Phrase  -- challenge, request
+data Round = Round String Phrase Phrase  -- hint, challenge, request
 
 toRound :: Phrase -> Round
-toRound ph = Round ph ph
+toRound ph = Round "" ph ph
 
 giantStepsGame :: Cloud [Round]
 giantStepsGame = (fmap.fmap) (\x -> toRound [[x]]) $ sequenceA (replicate 100 (Rand.uniform [36..71]))
@@ -99,9 +99,7 @@ challenges =
         [ "modal scale pairs" --> game scaleGame
         ]
     , "perfect pitch" -->
-        [ "masked pitch (C,E,G only)" --> game (perfectPitchGame [0,4,7])
-        , "masked pitch (white keys)" --> game (perfectPitchGame [0,2,4,5,7,9,11])
-        , "masked pitch" --> game (perfectPitchGame [0..11])
+        [ "masked pitch" --> game perfectPitchGame
         ]
     ]
     where
@@ -166,7 +164,7 @@ scale baseNote = Rand.uniform . map (scanl (+) baseNote) . concat $
 
 
 sequenceRound :: Connections -> Round -> JS.JSM Bool
-sequenceRound (src,dest) (Round challenge request) = do
+sequenceRound (src,dest) (Round hint challenge request) = do
     let playNotes =
             forM_ challenge $ \notes -> do
                 forM_ notes $ \note -> MIDI.sendEvent dest $ MIDI.NoteOn 0 note 64
@@ -182,8 +180,12 @@ sequenceRound (src,dest) (Round challenge request) = do
                | length (ch:history) < length expected -> listenSuccess (ch:history) win
                | otherwise -> listenSuccess (ch:history) False
 
+    when (not (null hint)) $ do
+        void $ (jquery "#hint" JS.# "text" $ [hint]) JS.# "css" $ ["display", "inline-block"]
     playNotes
-    listenSuccess [] True
+    result <- listenSuccess [] True
+    void $ (jquery "#hint" JS.# "text" $ [hint]) JS.# "css" $ ["display", "none"]
+    pure result
 
 data ScoreStats = ScoreStats
     { ssScore :: Int
@@ -299,7 +301,7 @@ triadGame = genChordGame triadTypes
 addArpeggiations :: [Round] -> [Round]
 addArpeggiations = concatMap (\ex -> [arp ex, ex])
     where
-    arp (Round [challenge] [request]) = Round (map (:[]) challenge) (map (:[]) request)
+    arp (Round hint [challenge] [request]) = Round hint (map (:[]) challenge) (map (:[]) request)
     arp x = x
 
 rootedChordGame :: [[Int]] -> Cloud [Round]
@@ -318,8 +320,14 @@ toppedChordGame chordTypes = Rand.uniform [48..71] >>= \baseNote -> replicateM 6
         root <- Rand.uniform chtype
         pure $ toRound . (:[]) . reverse . sort $ map (\x -> (x - root - 1) `mod` 12 + 1 + baseNote) chtype
 
-perfectPitchGame :: [Int] -> Cloud [Round]
-perfectPitchGame pitches = replicateM 66 getRound
+perfectPitchGame :: Cloud [Round]
+perfectPitchGame  = concat <$> sequenceA
+        [ replicateM 10 (getRound 6)
+        , replicateM 10 (getRound 4)
+        , replicateM 10 (getRound 3)
+        , replicateM 10 (getRound 2)
+        , replicateM 20 (getRound 1) 
+        ]
     where
     randomChord :: Int -> Cloud [Int]
     randomChord center = do
@@ -344,13 +352,21 @@ perfectPitchGame pitches = replicateM 66 getRound
                                              , replicateM 4 randomInterval
                                              , concat <$> replicateM 2 ((:) <$> randomChord center <*> random251 center)]
 
-    getRound :: Cloud Round
-    getRound = do
+    getRound :: Int -> Cloud Round
+    getRound hintdist = do
         octave <- Rand.uniform [36,48,60,72]
-        realpitch <- (octave +) <$> Rand.uniform pitches
+        realpitch <- (octave +) <$> Rand.uniform [0..11]
         maskpitch <- (octave +) <$> Rand.uniform [0..11]  -- don't give too much away with the mask
         mask <- randomMask maskpitch
-        pure $ Round (mask ++ [[realpitch]]) [[realpitch]]
+        pure $ Round (if hintdist > 1 then "One of " ++ hintify hintdist realpitch else "") (mask ++ [[realpitch]]) [[realpitch]]
+
+    hintify :: Int -> Int -> String
+    hintify hintdist pitch = intercalate ", " $ map pitchToName poss
+        where
+        poss = nub $ sort [ (pitch + hintdist * n) `mod` 12 | n <- [0..11] ]
+
+pitchToName :: Int -> String
+pitchToName n = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" ] !! (n `mod` 12)
 
 
 drainInput :: Connections -> JS.JSM ()
