@@ -1,0 +1,30 @@
+tempo 3*130
+[ride] intro = +.. ... +.. ... +.. +.. +.. +.-
+init = A:phrase A:phrase B:phrase A:phrase
+phrase = A:bar B:bar B:bar B:bar C:bar C:bar C:bar C:bar 
+phrase = A:bar B:bar C:bar D:bar A:bar B:bar C:bar D:bar 
+phrase = A:bar B:bar C:bar D:bar E:bar F:bar G:bar H:bar
+[kick snare hat ride tom] init = .
+[crash] init = #
+[snare kick hat tom ride] firstbar = A:bar
+[ride] bar = A:ridepair A:ridepair
+(3) ridepair = A:ridebeat B:ridebeat 
+ridepair = +.- .-.
+ridepair = .-. -.-
+ridebeat = +..
+ridebeat = +.-
+[hat] bar = ... -.. ... -..
+[snare tom kick] (3) bar = A:beat B:beat C:beat D:beat
+[snare tom kick] bar = [4/3](A:4half A:4half)
+(4) beat = ...
+beat = [2/1](...--)
+beat = ..-
+beat = +..
+
+[kick] 4half = +... ...+
+[kick] 4half = .-+. ...+
+[snare] 4half = .... *...
+[snare] 4half = .-.. *...
+[ride] 4half = +--- +---
+[ride] 4half = --+- --+-
+
