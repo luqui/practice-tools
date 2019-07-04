@@ -59,6 +59,9 @@ data Grammar = Grammar
     , gProductions :: [Production]
     } 
 
+emptyGrammar :: Grammar
+emptyGrammar = Grammar (4*100) []
+
 type Parser = P.Parsec String ()
 
 tok :: Parser a -> Parser a
@@ -196,16 +199,16 @@ jquery query = do
 
 loadConfig :: IO (Either P.ParseError Grammar)
 loadConfig = do
-    Just text <- JS.fromJSVal =<< ((jquery "#drumsheet") JS.# "text") ()
-    pure $ P.parse (parseGrammar <* P.eof) "<textarea>" text
+    Just text <- JS.fromJSVal =<< ((jquery "#drumsheet") JS.# "val") ()
+    void $ JS.jsg "console" JS.# "log" $ [text]
+    pure $ P.parse (parseGrammar <* P.eof) "<textarea>" (text ++ "\n")
 
 main :: IO ()
 main = do
     mainThread <- myThreadId
     void $ Sig.installHandler Sig.sigINT (Sig.Catch (throwTo mainThread ExitSuccess)) Nothing
 
-    grammar0 <- join $ either (fail.show) pure <$> loadConfig
-    grammarRef <- newIORef grammar0
+    grammarRef <- newIORef emptyGrammar
 
     (_, conn) <- MIDI.makeInterface
 
@@ -225,6 +228,8 @@ main = do
             waitUntil (addSeconds (phraseScale * max (maximum lens) 0.1) now)
 
     void $ jquery "#run" JS.# "click" $ JS.fun $ \_ _ _ -> do
+        grammar0 <- join $ either (fail.show) pure <$> loadConfig
+        writeIORef grammarRef grammar0
         play "intro"
         forever (play "init")
 
