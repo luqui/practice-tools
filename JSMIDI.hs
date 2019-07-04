@@ -23,7 +23,7 @@ makeInterface = do
     tools <- jsgf "MIDITools" (
         jsg "jQuery",
         jsg1 "Keyboard" =<< jsg "jQuery",
-        jsg1 "Synth" =<< jsg "Tone")
+        jsg1 "DrumKit" =<< jsg "Tone")
 
     io <- new (tools ! "IOSelector") ()
 
