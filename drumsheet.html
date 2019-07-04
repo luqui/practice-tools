@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <script language="javascript" src="jslib/jquery-3.3.1.js"></script>
+    <script language="javascript" src="jslib/jquery.cookie.js"></script>
+    <script language="javascript" src="jslib/Tone.js"></script>
+    <script language="javascript" src="jslib/Keyboard.js"></script>
+    <script language="javascript" src="jslib/Synth.js"></script>
+    <script language="javascript" src="jslib/MIDITools.js"></script>
+    <script language="javascript" src="Drumsheet.jsexe/rts.js"></script>
+    <script language="javascript" src="Drumsheet.jsexe/lib.js"></script>
+    <script language="javascript" src="Drumsheet.jsexe/out.js"></script>
+
+    <style>
+    #drumsheet {
+      font-family: monospace;
+    }
+    </style>
+  </head>
+  <body>
+   <p><b>Rhythm Grammars</b></p>
+   <textarea id="drumsheet" rows="35" cols="80">
+tempo 90*4
+[kick] init = +... ....
+[snare] init = .... +...
+</textarea>
+   <div id="status"></div>
+   <button id="run">Run</button>
+  </body>
+  <script language="javascript" src="Drumsheet.jsexe/runmain.js" defer></script>
+</html>

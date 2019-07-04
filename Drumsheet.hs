@@ -5,7 +5,7 @@ import Control.Applicative
 import Control.Arrow (first)
 import Control.Concurrent (forkIO, threadDelay, myThreadId)
 import Control.Exception (throwTo)
-import Control.Monad (filterM, forM, forM_, void, replicateM, when, forever, join)
+import Control.Monad (forM, forM_, void, replicateM, when, forever, join)
 import qualified Control.Monad.Logic as Logic
 import qualified Control.Monad.Random as Rand
 import Control.Monad.Trans.Class (lift)
@@ -16,12 +16,13 @@ import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import qualified Data.Map as Map
 import Data.Ord (comparing)
 import Data.Ratio ((%))
-import System.Environment (getArgs)
 import System.Exit (ExitCode(ExitSuccess))
-import qualified System.MIDI as MIDI
+import qualified Data.Time.Clock as Clock
 import qualified System.Posix.Signals as Sig
-import qualified System.Process as Process
 import qualified Text.Parsec as P
+
+import qualified JSMIDI as MIDI
+import qualified Language.Javascript.JSaddle as JS
 
 type Time = Rational
 
@@ -188,43 +189,32 @@ instruments = --[ drumkit [36], drumkit [37], drumkit [38,39], drumkit [40,41], 
         chosen <- replicateM 5 (Rand.uniform notes)
         pure $ Instrument name $ \i -> Note 1 (cycle chosen !! i) (if i == 0 then 0 else min 127 (i * 15 + 30))
 
-loadConfig :: FilePath -> IO (Either P.ParseError Grammar)
-loadConfig config = P.parse (parseGrammar <* P.eof) config <$> readFile config
+jquery :: String -> JS.JSM JS.JSVal
+jquery query = do
+    jq <- JS.jsg "jQuery"
+    JS.call jq jq [query]
 
-
-watchConfig :: FilePath -> IORef Grammar -> IO ()
-watchConfig config ref = do
-    grammar <- loadConfig config
-    case grammar of
-        Left err -> print err
-        Right g -> do
-            putStrLn ("Loaded " ++ config)
-            writeIORef ref g
-    void $ Process.withCreateProcess 
-             (Process.proc "/usr/local/bin/fswatch" ["fswatch", "-1", config]) $ \_ _ _ p -> 
-                Process.waitForProcess p
-    watchConfig config ref
+loadConfig :: IO (Either P.ParseError Grammar)
+loadConfig = do
+    Just text <- JS.fromJSVal =<< ((jquery "#drumsheet") JS.# "text") ()
+    pure $ P.parse (parseGrammar <* P.eof) "<textarea>" text
 
 main :: IO ()
 main = do
     mainThread <- myThreadId
     void $ Sig.installHandler Sig.sigINT (Sig.Catch (throwTo mainThread ExitSuccess)) Nothing
 
-    [config] <- getArgs
-    grammar0 <- join $ either (fail.show) pure <$> loadConfig config
+    grammar0 <- join $ either (fail.show) pure <$> loadConfig
     grammarRef <- newIORef grammar0
 
-    void . forkIO $ watchConfig config grammarRef
-
-
-    conn <- openConn
-    MIDI.start conn
+    (_, conn) <- MIDI.makeInterface
 
     let play startsym = do
             grammar <- readIORef grammarRef
             let phraseScale = 60 / fromIntegral (gTempo grammar)
             instrs <- Rand.evalRandIO (sequenceA instruments)
-            now <- getCurrentTime conn
+
+            now <- Clock.getCurrentTime
             lens <- forM instrs $ \instr -> do
                 phraseMay <- Rand.evalRandIO $ Logic.observeManyT 1 (renderGrammar startsym grammar instr)
                 case phraseMay of
@@ -232,34 +222,30 @@ main = do
                     phrase:_ -> do
                         void . forkIO . playPhrase conn now $ scale phraseScale phrase
                         pure (phraseLen phrase)
-            waitUntil conn (now + phraseScale * max (maximum lens) 0.1)
-    play "intro"
-    forever (play "init")
+            waitUntil (addSeconds (phraseScale * max (maximum lens) 0.1) now)
+
+    void $ jquery "#run" JS.# "click" $ JS.fun $ \_ _ _ -> do
+        play "intro"
+        forever (play "init")
 
 
 data Note = Note Int Int Int -- ch note vel
     deriving (Show)
 
-playPhrase :: MIDI.Connection -> Time -> Phrase Note -> IO ()
+addSeconds :: Time -> Clock.UTCTime -> Clock.UTCTime
+addSeconds diff base = Clock.addUTCTime (realToFrac diff) base
+
+playPhrase :: MIDI.Output -> Clock.UTCTime -> Phrase Note -> IO ()
 playPhrase _ _ (Phrase _ []) = pure ()
 playPhrase conn offset (Phrase len (sortBy (comparing fst) -> evs)) = do
-    forM_ (zip evs (map fst (tail evs) ++ [offset+len])) $ \((t,Note ch note vel),t') -> do
-        waitUntil conn (t + offset)
-        MIDI.send conn (MIDI.MidiMessage ch (MIDI.NoteOn note vel))
-        waitUntil conn (t' + offset)
-        MIDI.send conn (MIDI.MidiMessage ch (MIDI.NoteOn note 0))
+    forM_ (zip evs (map fst (tail evs) ++ [len])) $ \((t,Note ch note vel),t') -> do
+        waitUntil (addSeconds t offset)
+        MIDI.sendEvent conn (MIDI.NoteOn ch note vel)
+        waitUntil (addSeconds t' offset)
+        MIDI.sendEvent conn (MIDI.NoteOn ch note 0)
 
-getCurrentTime :: MIDI.Connection -> IO Time
-getCurrentTime conn = do
-    now <- MIDI.currentTime conn
-    pure $ fromIntegral now / 1000
-
-waitUntil :: MIDI.Connection -> Time -> IO ()
-waitUntil conn target = do
-    now <- getCurrentTime conn
-    let delay = target - now
+waitUntil :: Clock.UTCTime -> IO ()
+waitUntil target = do
+    now <- Clock.getCurrentTime
+    let delay = Clock.diffUTCTime target now
     when (delay > 0) (threadDelay (round (1000000 * delay)))
-    
-
-openConn :: IO MIDI.Connection
-openConn = MIDI.openDestination =<< fmap head . filterM (fmap (== "IAC Bus 1") . MIDI.getName) =<< MIDI.enumerateDestinations 
