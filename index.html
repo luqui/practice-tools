@@ -1,78 +1,12 @@
-<!DOCTYPE html>
 <html>
-  <head>
-    <link rel="shortcut icon" type="image/bmp" href="favicon.ico" />
- 
-    <script language="javascript" src="jquery-3.3.1.js"></script>
-    <script language="javascript" src="jquery.cookie.js"></script>
-    <script language="javascript" src="Tone.js"></script>
-    <script language="javascript" src="Keyboard.js"></script>
-    <script language="javascript" src="Synth.js"></script>
-    <script language="javascript" src="MIDITools.js"></script>
-    <script language="javascript" src="EarTraining.jsexe/rts.js"></script>
-    <script language="javascript" src="EarTraining.jsexe/lib.js"></script>
-    <script language="javascript" src="EarTraining.jsexe/out.js"></script>
-
-    <style>
-    body {
-      touch-action: manipulation;
-    }
-    .score {
-      font-size: 48pt;
-    }
-    .scoretable {
-      background-color: black;
-      color: green;
-      font-family: monospace;
-    }
-    .scoretable td {
-      padding: 10px;
-    }
-    .replay {
-      font-size: 18pt;
-    }
-    .newHiScore {
-      color: green;
-      font-weight: bold;
-    }
-    .hiScore {
-      font-weight: bold;
-    }
-    button {
-      background: orange;
-    }
-    #hint {
-      display: none;
-      padding: 6px;
-      background: lightgreen;
-      font-size: 16pt;
-    }
-    </style>
-  </head>
   <body>
-   <p><b>Advanced Ear Training Games</b></p>
-   <p>
-      These games are all the same: the computer will play a note, chord, or phrase, and then you should play the same thing.<br/>
-      If you get it on the first try you advance to the next round.  Otherwise you lose a life.<br/>
-      If you get 10 in a row without missing you get an extra life.<br/>
-      To do chords on the virtual keyboard, hold shift and select multiple notes, or use the "Chord" button on mobile.<br/>
-      If you have midi input or output devices, you can use the select boxes to use them instead of the web ones.<br/>
-      <a href="https://github.com/luqui/practice-tools">source code</a></p>
-      
-   <ul id="games"></ul>
-   <table class="scoretable">
-    <tr>
-     <td>Round</td>
-     <td>Combo</td>
-     <td>Lives</td>
-    </tr>
-    <div id="hint"></div>
-    <tr class="score">
-     <td id="level">0</td>
-     <td id="combo">0</td>
-     <td id="lives">0</td>
-    </tr>
-   </table>
+    <p>Practice tools by <a href="https://github.com/luqui">Luke Palmer</a>.</p>
+    <ul>
+      <li><a href="ear-training.html">Advanced Ear Training Games</a></li>
+      <li><a href="drumsheet.html">Rhythm Grammars</a></li>
+    </ul>
   </body>
-  <script language="javascript" src="EarTraining.jsexe/runmain.js" defer></script>
 </html>
+
+
+

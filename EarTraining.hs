@@ -23,7 +23,7 @@ maybeRead s
     | otherwise = Nothing
 
 getConn :: JS.JSM Connections
-getConn = MIDI.makeInterface
+getConn = MIDI.makeInterface "Synth"
 
 combinations :: Int -> [a] -> [[a]]
 combinations 0 _ = [[]]

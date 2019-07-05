@@ -1,0 +1,24 @@
+tempo 4*90
+
+[snare] intro = -.-.-. A:bar A:bar A:bar B:fillbar
+[kick hat ride tom] intro = ...... A:bar A:bar A:bar B:fillbar
+// basic
+// [kick snare hat ride tom] init = A:bar A:bar A:bar A:bar A:bar A:bar A:bar B:fillbar
+// shesh shiminut
+[kick snare hat ride] init = A:bar A:bar A:bar A:bar A:bar A:bar A:bar A:bar B:bar B:bar B:bar B:bar B:bar B:bar B:bar *..... ...... C:bar C:bar C:bar *...*...*... C:bar C:bar E:lefthalf [4/6](****) #..... ...... A:bar A:bar A:bar D:fillbar
+[kick snare hat ride] init = A:bar A:bar A:bar A:bar A:bar A:bar A:bar A:bar B:bar B:bar B:bar B:bar B:bar B:bar B:bar D:fillbar C:bar C:bar C:bar *...*...*... C:bar C:bar C:bar D:fillbar A:bar A:bar A:bar D:fillbar
+[crash] init = #
+lefthalf = +.- .-.
+righthalf = --. -.-
+lefthalf = +.. ...
+righthalf = ..+ ...
+righthalf = ... -+.
+lefthalf = A:quarter B:quarter
+righthalf = A:quarter B:quarter
+quarter = +..
+quarter = +.-
+bar = A:lefthalf B:righthalf
+fillbar = A:bar
+fillbar = ++. --. ++. ---
+fillbar = .++ .-- .++ +--
+fillbar = +... +.+. +---
