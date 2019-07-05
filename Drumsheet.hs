@@ -14,6 +14,7 @@ import Data.Foldable (asum)
 import Data.List (nub, sortBy)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import qualified Data.Map as Map
+import Data.Maybe (catMaybes)
 import Data.Ord (comparing)
 import Data.Ratio ((%))
 import System.Exit (ExitCode(ExitSuccess))
@@ -43,6 +44,10 @@ overlay (Phrase t es) (Phrase t' es') = Phrase (max t t') (es ++ es')
 
 scale :: Rational -> Phrase a -> Phrase a
 scale r (Phrase len evs) = Phrase (len * r) (map (first (*r)) evs)
+
+-- filter out nothings
+joinMaybe :: Phrase (Maybe a) -> Phrase a
+joinMaybe (Phrase t es) = Phrase t (catMaybes (map sequenceA es))
 
 data Sym = Sym String String
          | Terminal Int
@@ -175,7 +180,7 @@ renderProduction chooseProd prodname depth = (`State.evalStateT` Map.empty) $ do
                     
 renderGrammar :: String -> Grammar -> Instrument -> Logic.LogicT Cloud (Phrase Note)
 renderGrammar startsym grammar (Instrument trackname rendervel) = do
-    fmap rendervel <$> renderProduction chooseProd startsym 10
+    joinMaybe . fmap rendervel <$> renderProduction chooseProd startsym 10
     where
     chooseProd :: String -> Logic.LogicT Cloud Production
     chooseProd label = do
@@ -185,7 +190,7 @@ renderGrammar startsym grammar (Instrument trackname rendervel) = do
 
 type TrackName = String
 
-data Instrument = Instrument TrackName (Int -> Note)
+data Instrument = Instrument TrackName (Int -> Maybe Note)
 
 instruments :: [Cloud Instrument]
 instruments = --[ drumkit [36], drumkit [37], drumkit [38,39], drumkit [40,41], drumkit [42,43,44,45] ]
@@ -193,7 +198,7 @@ instruments = --[ drumkit [36], drumkit [37], drumkit [38,39], drumkit [40,41], 
     where
     drumkit name notes = do
         chosen <- replicateM 5 (Rand.uniform notes)
-        pure $ Instrument name $ \i -> Note 1 (cycle chosen !! i) (if i == 0 then 0 else min 127 (i * 15 + 30))
+        pure $ Instrument name $ \i -> if i == 0 then Nothing else Just $ Note 1 (cycle chosen !! i) (min 127 (i * 15 + 30))
 
 jquery :: String -> JS.JSM JS.JSVal
 jquery query = do
