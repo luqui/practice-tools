@@ -41,12 +41,26 @@
            playing = true;
          }
        };
+       var update_url = function() {
+         var sourcecode = btoa($('#drumsheet').val());
+         window.history.replaceState({}, null, 'drumsheet.html?code=' + sourcecode);
+       };
+
+       var load_from_url = function() {
+         var m = document.location.href.match(/\?code=([^&]*)/);
+         if (m) {
+           $('#drumsheet').val(atob(m[1]));
+           changed = true;
+         }
+       };
+       load_from_url();
+
 
        $('#drumsheet').keydown(e => {
          if (e.which == 13 && e.shiftKey) {
            if (changed) {
              reload(
-               () => { ensure_playing(); changed = false; hide_error(); }, 
+               () => { ensure_playing(); changed = false; hide_error(); update_url(); }, 
                e  => { changed = false; show_error(e) });
            }
            else {

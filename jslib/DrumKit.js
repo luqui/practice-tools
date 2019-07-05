@@ -20,7 +20,7 @@ var drums = {
 
 $$.Synth = function() {
   this.players = new Tone.Players().toMaster();
-  this.players.volume.value = -10;
+  this.players.volume.value = 0;
   this.loadSamples();
 };
 
@@ -51,12 +51,16 @@ $$.Synth.prototype.noteOn = function(note, vel) {
   }
   else if (vel < 80) {
     drumname += "-soft";
+    var volume = vel / 80;
   }
   else {
     drumname += "-loud";
+    var volume = 0.7 + 0.3 * (vel-80)/(127-80);
   }
 
-  this.players.get(drumname).start();
+  var player = this.players.get(drumname);
+  player.volume.value = -20 + 20 * volume;
+  player.start();
 };
 
 $$.Synth.prototype.send = function(dat) {
