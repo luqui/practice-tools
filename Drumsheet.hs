@@ -1,9 +1,10 @@
 {-# OPTIONS -Wall #-}
-{-# LANGUAGE DeriveFunctor, TupleSections, ViewPatterns, LambdaCase, ScopedTypeVariables #-}
+{-# LANGUAGE DeriveFunctor, TupleSections, ViewPatterns, LambdaCase, ScopedTypeVariables, DeriveGeneric, DeriveAnyClass #-}
 
 import Control.Applicative
 import Control.Arrow (first)
 import Control.Concurrent (forkIO, threadDelay, myThreadId, killThread)
+import Control.DeepSeq (NFData(rnf))
 import Control.Exception (throwTo)
 import Control.Monad (forM, forM_, void, replicateM, when, forever, join)
 import qualified Control.Monad.Logic as Logic
@@ -17,8 +18,9 @@ import qualified Data.Map as Map
 import Data.Maybe (catMaybes)
 import Data.Ord (comparing)
 import Data.Ratio ((%))
-import System.Exit (ExitCode(ExitSuccess))
 import qualified Data.Time.Clock as Clock
+import GHC.Generics (Generic)
+import System.Exit (ExitCode(ExitSuccess))
 import qualified System.Posix.Signals as Sig
 import qualified Text.Parsec as P
 
@@ -28,10 +30,7 @@ import qualified Language.Javascript.JSaddle as JS
 type Time = Rational
 
 data Phrase a = Phrase Time [(Time, a)]
-    deriving (Functor, Show)
-
-phraseLen :: Phrase a -> Time
-phraseLen (Phrase l _) = l
+    deriving (Functor, Show, Generic, NFData)
 
 instance Semigroup (Phrase a) where
     Phrase t es <> Phrase t' es' = Phrase (t+t') (es <> map (first (+t)) es')
@@ -225,21 +224,26 @@ main = do
     void $ Sig.installHandler Sig.sigINT (Sig.Catch (throwTo mainThread ExitSuccess)) Nothing
 
     grammarRef <- newIORef emptyGrammar
+    nextPhraseRef <- newIORef mempty
     playThreadIdRef <- newIORef Nothing
 
     conn <- MIDI.makeOutput "DrumKit"
 
-    let play startsym = do
+    let genphrase startsym = do
             grammar <- readIORef grammarRef
             let phraseScale = 60 / fromIntegral (gTempo grammar)
             instrs <- Rand.evalRandIO (sequenceA instruments)
-
-            now <- Clock.getCurrentTime
             phrases <- forM instrs $ \instr -> do
                 fmap (foldAssoc overlay mempty) . Rand.evalRandIO $ Logic.observeManyT 1 (renderGrammar startsym grammar instr)
-            let phrase = foldAssoc overlay mempty phrases
-            playPhrase conn now (scale phraseScale phrase)
-            waitUntil (addSeconds (phraseScale * max (phraseLen phrase) 0.1) now)
+            let r = scale phraseScale $ foldAssoc overlay mempty phrases
+            rnf r `seq` pure r
+
+    let play = do
+            nextPhrase <- readIORef nextPhraseRef
+            void . forkIO $ writeIORef nextPhraseRef =<< genphrase "init"
+            now <- Clock.getCurrentTime
+            playPhrase conn now nextPhrase
+            waitUntil (addSeconds 0.1 now)  -- to prevent spamming of emptiness
 
     --void $ jquery "#drumsheet" JS.# "keyup" $ JS.fun $ \_ _ _ -> abortFail $ do 
     --    grammar <- join $ either (fail.show) pure <$> loadConfig
@@ -247,8 +251,8 @@ main = do
 
     let playcb = do
             tid <- forkIO $ do
-                play "intro"
-                forever (play "init")
+                writeIORef nextPhraseRef =<< genphrase "intro"
+                forever play
             writeIORef playThreadIdRef (Just tid)
     let stopcb = do
             tidMay <- readIORef playThreadIdRef
@@ -264,6 +268,7 @@ main = do
                     void . join $ JS.call errcb <$> JS.jsg "window" <*> pure [show err]
                 Right grammar -> do
                     writeIORef grammarRef grammar
+                    void . forkIO $ writeIORef nextPhraseRef =<< genphrase "init"
                     void . join $ JS.call successcb <$> JS.jsg "window" <*> pure ()
         reloadcb _ = fail "Wrong number of arguments to reloadcb"
             
@@ -273,7 +278,7 @@ main = do
 -- consoleLog v = void $ JS.jsg "console" JS.# "log" $ [v]
 
 data Note = Note Int Int Int -- ch note vel
-    deriving (Show)
+    deriving (Show, Generic, NFData)
 
 addSeconds :: Time -> Clock.UTCTime -> Clock.UTCTime
 addSeconds diff base = Clock.addUTCTime (realToFrac diff) base
