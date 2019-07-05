@@ -39,7 +39,7 @@ $$.Synth.prototype.loadSamples = function() {
 
 $$.Synth.prototype.noteOn = function(note, vel) {
   Tone.context.resume();
-  
+
   if (!(note in drums)) {
     return;
   }

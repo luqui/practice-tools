@@ -4,7 +4,7 @@
 import Control.Applicative
 import Control.Arrow (first)
 import Control.Concurrent (forkIO, threadDelay, myThreadId, killThread)
-import Control.Exception (throwTo, SomeException, catch)
+import Control.Exception (throwTo)
 import Control.Monad (forM, forM_, void, replicateM, when, forever, join)
 import qualified Control.Monad.Logic as Logic
 import qualified Control.Monad.Random as Rand
@@ -68,7 +68,7 @@ emptyGrammar = Grammar (4*100) []
 type Parser = P.Parsec String ()
 
 tok :: Parser a -> Parser a
-tok p = P.try p <* (comment <|> void (P.many (P.char ' ')))
+tok p = P.try p <* P.many (void (P.char ' ') <|> comment)
 
 unique :: (Eq a) => [a] -> Bool
 unique xs = nub xs == xs
@@ -205,14 +205,6 @@ loadConfig = do
     Just text <- JS.fromJSVal =<< ((jquery "#drumsheet") JS.# "val") ()
     pure $ P.parse (parseGrammar <* P.eof) "drumsheet" (text ++ "\n")
 
-abortFail :: IO () -> IO ()
-abortFail act = do
-    (act >> clearStatus) `catch` \(e :: SomeException) -> do
-        void $ jquery "#status" JS.# "text" $ [show e]
-        void $ jquery "#status" JS.# "removeClass" $ ["hidden"]
-    where
-    clearStatus = void $ jquery "#status" JS.# "addClass" $ ["hidden"]
-
 foldAssoc :: (a -> a -> a) -> a -> [a] -> a
 foldAssoc _ z [] = z
 foldAssoc _ _ [x] = x
@@ -244,26 +236,36 @@ main = do
             playPhrase conn now (scale phraseScale phrase)
             waitUntil (addSeconds (phraseScale * max (phraseLen phrase) 0.1) now)
 
-    void $ jquery "#drumsheet" JS.# "change" $ JS.fun $ \_ _ _ -> abortFail $ do 
-        grammar <- join $ either (fail.show) pure <$> loadConfig
-        writeIORef grammarRef grammar
+    --void $ jquery "#drumsheet" JS.# "keyup" $ JS.fun $ \_ _ _ -> abortFail $ do 
+    --    grammar <- join $ either (fail.show) pure <$> loadConfig
+    --    writeIORef grammarRef grammar
 
-    void $ jquery "#run" JS.# "click" $ JS.fun $ \_ _ _ -> do
-        prevtid <- readIORef playThreadIdRef
-        case prevtid of
-            Nothing -> do
-                tid <- forkIO $ do
-                    grammar0 <- join $ either (fail.show) pure <$> loadConfig
-                    writeIORef grammarRef grammar0
-                    play "intro"
-                    forever (play "init")
-                writeIORef playThreadIdRef (Just tid)
-                void $ jquery "#run" JS.# "text" $ ["Stop"]
-            Just tid -> do
-                writeIORef playThreadIdRef Nothing
-                killThread tid
-                void $ jquery "#run" JS.# "text" $ ["Run"]
+    let playcb = do
+            tid <- forkIO $ do
+                play "intro"
+                forever (play "init")
+            writeIORef playThreadIdRef (Just tid)
+    let stopcb = do
+            tidMay <- readIORef playThreadIdRef
+            case tidMay of
+                Nothing -> pure ()
+                Just tid -> do
+                    writeIORef playThreadIdRef Nothing
+                    killThread tid
+    let reloadcb [successcb, errcb] = do
+            grammarE <- loadConfig
+            case grammarE of
+                Left err -> do
+                    void . join $ JS.call errcb <$> JS.jsg "window" <*> pure [show err]
+                Right grammar -> do
+                    writeIORef grammarRef grammar
+                    void . join $ JS.call successcb <$> JS.jsg "window" <*> pure ()
+        reloadcb _ = fail "Wrong number of arguments to reloadcb"
+            
+    void $ JS.jsg3 "install_handlers" (JS.fun (\_ _ _ -> playcb)) (JS.fun (\_ _ _ -> stopcb)) (JS.fun (\_ _ -> reloadcb))
 
+-- consoleLog :: JS.JSVal -> IO ()
+-- consoleLog v = void $ JS.jsg "console" JS.# "log" $ [v]
 
 data Note = Note Int Int Int -- ch note vel
     deriving (Show)
