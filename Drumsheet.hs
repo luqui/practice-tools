@@ -3,7 +3,7 @@
 
 import Control.Applicative
 import Control.Arrow (first)
-import Control.Concurrent (forkIO, threadDelay, myThreadId)
+import Control.Concurrent (forkIO, threadDelay, myThreadId, killThread)
 import Control.Exception (throwTo, SomeException, catch)
 import Control.Monad (forM, forM_, void, replicateM, when, forever, join)
 import qualified Control.Monad.Logic as Logic
@@ -37,6 +37,9 @@ instance Semigroup (Phrase a) where
 
 instance Monoid (Phrase a) where
     mempty = Phrase 0 []
+
+overlay :: Phrase a -> Phrase a -> Phrase a
+overlay (Phrase t es) (Phrase t' es') = Phrase (max t t') (es ++ es')
 
 scale :: Rational -> Phrase a -> Phrase a
 scale r (Phrase len evs) = Phrase (len * r) (map (first (*r)) evs)
@@ -210,12 +213,22 @@ abortFail act = do
     where
     clearStatus = void $ jquery "#status" JS.# "addClass" $ ["hidden"]
 
+foldAssoc :: (a -> a -> a) -> a -> [a] -> a
+foldAssoc _ z [] = z
+foldAssoc _ _ [x] = x
+foldAssoc f z xs = foldAssoc f z (pairUp xs)
+    where
+    pairUp [] = []
+    pairUp [x] = [x]
+    pairUp (x:y:xs') = f x y : pairUp xs'
+
 main :: IO ()
 main = do
     mainThread <- myThreadId
     void $ Sig.installHandler Sig.sigINT (Sig.Catch (throwTo mainThread ExitSuccess)) Nothing
 
     grammarRef <- newIORef emptyGrammar
+    playThreadIdRef <- newIORef Nothing
 
     (_, conn) <- MIDI.makeInterface
 
@@ -225,24 +238,31 @@ main = do
             instrs <- Rand.evalRandIO (sequenceA instruments)
 
             now <- Clock.getCurrentTime
-            lens <- forM instrs $ \instr -> do
-                phraseMay <- Rand.evalRandIO $ Logic.observeManyT 1 (renderGrammar startsym grammar instr)
-                case phraseMay of
-                    [] -> pure 0
-                    phrase:_ -> do
-                        void . forkIO . playPhrase conn now $ scale phraseScale phrase
-                        pure (phraseLen phrase)
-            waitUntil (addSeconds (phraseScale * max (maximum lens) 0.1) now)
+            phrases <- forM instrs $ \instr -> do
+                fmap (foldAssoc overlay mempty) . Rand.evalRandIO $ Logic.observeManyT 1 (renderGrammar startsym grammar instr)
+            let phrase = foldAssoc overlay mempty phrases
+            playPhrase conn now (scale phraseScale phrase)
+            waitUntil (addSeconds (phraseScale * max (phraseLen phrase) 0.1) now)
 
     void $ jquery "#drumsheet" JS.# "change" $ JS.fun $ \_ _ _ -> abortFail $ do 
         grammar <- join $ either (fail.show) pure <$> loadConfig
         writeIORef grammarRef grammar
 
     void $ jquery "#run" JS.# "click" $ JS.fun $ \_ _ _ -> do
-        grammar0 <- join $ either (fail.show) pure <$> loadConfig
-        writeIORef grammarRef grammar0
-        play "intro"
-        forever (play "init")
+        prevtid <- readIORef playThreadIdRef
+        case prevtid of
+            Nothing -> do
+                tid <- forkIO $ do
+                    grammar0 <- join $ either (fail.show) pure <$> loadConfig
+                    writeIORef grammarRef grammar0
+                    play "intro"
+                    forever (play "init")
+                writeIORef playThreadIdRef (Just tid)
+                void $ jquery "#run" JS.# "text" $ ["Stop"]
+            Just tid -> do
+                writeIORef playThreadIdRef Nothing
+                killThread tid
+                void $ jquery "#run" JS.# "text" $ ["Run"]
 
 
 data Note = Note Int Int Int -- ch note vel
