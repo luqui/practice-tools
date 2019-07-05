@@ -1,10 +1,10 @@
 {-# OPTIONS -Wall #-}
-{-# LANGUAGE DeriveFunctor, TupleSections, ViewPatterns, LambdaCase #-}
+{-# LANGUAGE DeriveFunctor, TupleSections, ViewPatterns, LambdaCase, ScopedTypeVariables #-}
 
 import Control.Applicative
 import Control.Arrow (first)
 import Control.Concurrent (forkIO, threadDelay, myThreadId)
-import Control.Exception (throwTo)
+import Control.Exception (throwTo, SomeException, catch)
 import Control.Monad (forM, forM_, void, replicateM, when, forever, join)
 import qualified Control.Monad.Logic as Logic
 import qualified Control.Monad.Random as Rand
@@ -12,7 +12,7 @@ import Control.Monad.Trans.Class (lift)
 import qualified Control.Monad.Trans.State as State
 import Data.Foldable (asum)
 import Data.List (nub, sortBy)
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import Data.IORef (newIORef, readIORef, writeIORef)
 import qualified Data.Map as Map
 import Data.Ord (comparing)
 import Data.Ratio ((%))
@@ -186,7 +186,7 @@ data Instrument = Instrument TrackName (Int -> Note)
 
 instruments :: [Cloud Instrument]
 instruments = --[ drumkit [36], drumkit [37], drumkit [38,39], drumkit [40,41], drumkit [42,43,44,45] ]
-    [ drumkit "kick" [36], drumkit "snare" [37,38,39,40], drumkit "hat" [42,44,46], drumkit "tom" [41,43,45,47], drumkit "ride" [50, 53], drumkit "crash" [55] ]
+    [ drumkit "kick" [36], drumkit "snare" [37,38,40], drumkit "hat" [42,44,46], drumkit "tom" [43,45,47], drumkit "ride" [50, 53], drumkit "crash" [55] ]
     where
     drumkit name notes = do
         chosen <- replicateM 5 (Rand.uniform notes)
@@ -200,8 +200,15 @@ jquery query = do
 loadConfig :: IO (Either P.ParseError Grammar)
 loadConfig = do
     Just text <- JS.fromJSVal =<< ((jquery "#drumsheet") JS.# "val") ()
-    void $ JS.jsg "console" JS.# "log" $ [text]
-    pure $ P.parse (parseGrammar <* P.eof) "<textarea>" (text ++ "\n")
+    pure $ P.parse (parseGrammar <* P.eof) "drumsheet" (text ++ "\n")
+
+abortFail :: IO () -> IO ()
+abortFail act = do
+    (act >> clearStatus) `catch` \(e :: SomeException) -> do
+        void $ jquery "#status" JS.# "text" $ [show e]
+        void $ jquery "#status" JS.# "removeClass" $ ["hidden"]
+    where
+    clearStatus = void $ jquery "#status" JS.# "addClass" $ ["hidden"]
 
 main :: IO ()
 main = do
@@ -226,6 +233,10 @@ main = do
                         void . forkIO . playPhrase conn now $ scale phraseScale phrase
                         pure (phraseLen phrase)
             waitUntil (addSeconds (phraseScale * max (maximum lens) 0.1) now)
+
+    void $ jquery "#drumsheet" JS.# "change" $ JS.fun $ \_ _ _ -> abortFail $ do 
+        grammar <- join $ either (fail.show) pure <$> loadConfig
+        writeIORef grammarRef grammar
 
     void $ jquery "#run" JS.# "click" $ JS.fun $ \_ _ _ -> do
         grammar0 <- join $ either (fail.show) pure <$> loadConfig

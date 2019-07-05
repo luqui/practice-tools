@@ -178,8 +178,6 @@ $$.Keyboard.prototype.installClickHandler = function() {
 
     self.playingNotes = [];
 
-    console.log(notes);
-    
     for (var k of notes) {
       self.callback([0x90, k, 96]);
       self._drawKey(null, null, k, 'orange');

@@ -31,8 +31,7 @@ $$.Synth.prototype.loadSamples = function() {
         var drum = drums[noteid];
         var vel = vol;
         var fname = "assets/Drum-" + drum + "-" + vel + ".mp3";
-        console.log("loading ", fname);
-        this.players.add(drum + "-" + vel, fname, () => console.log("loaded ", fname));
+        this.players.add(drum + "-" + vel, fname);
       })();
     }
   }
@@ -57,7 +56,6 @@ $$.Synth.prototype.noteOn = function(note, vel) {
     drumname += "-loud";
   }
 
-  console.log("playing", drumname);
   this.players.get(drumname).start();
 };
 

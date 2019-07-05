@@ -15,6 +15,14 @@
     #drumsheet {
       font-family: monospace;
     }
+    #status {
+      font-family: monospace;
+      background: #faa;
+      padding: 5px;
+    }
+    .hidden {
+      display: none;
+    }
     </style>
   </head>
   <body>
@@ -24,7 +32,7 @@ tempo 90*4
 [kick] init = +... ....
 [snare] init = .... +...
 </textarea>
-   <div id="status"></div>
+   <pre id="status" class="hidden"></pre>
    <button id="run">Run</button>
   </body>
   <script language="javascript" src="Drumsheet.jsexe/runmain.js" defer></script>
