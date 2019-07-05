@@ -222,7 +222,7 @@ main = do
     grammarRef <- newIORef emptyGrammar
     playThreadIdRef <- newIORef Nothing
 
-    (_, conn) <- MIDI.makeInterface
+    conn <- MIDI.makeOutput "DrumKit"
 
     let play startsym = do
             grammar <- readIORef grammarRef

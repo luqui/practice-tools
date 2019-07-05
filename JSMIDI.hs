@@ -16,16 +16,39 @@ newtype Input = Input { pollEvent :: JSM (Maybe Event) }
 
 newtype Output = Output { sendEvent :: Event -> JSM () }
 
-makeInterface :: JSM (Input, Output)
-makeInterface = do
+
+makeOutput :: String -> JSM Output
+makeOutput synthmod = do
+    tools <- jsgf "MIDITools" (
+        jsg "jQuery",
+        jsg1 "Keyboard" =<< jsg "jQuery")
+
+    -- XXX hacky DI design
+    makesynth <- eval $ "() => new (" ++ synthmod ++ "(Tone)).Synth()"
+    
+    outp <- new (tools ! "OutputSelector") (makesynth)
+
+    void $ (jsg1 "jQuery" =<< (jsg "document" ! "body")) # "append" $ (outp ! "widget")
+
+    let send e = do
+            dat <- toJSData e
+            void $ outp # "send" $ dat
+    pure (Output send)
+
+
+makeInterface :: String -> JSM (Input, Output)
+makeInterface synthmod = do
     -- instantiate midi tools module, dependency injection style
 
     tools <- jsgf "MIDITools" (
         jsg "jQuery",
-        jsg1 "Keyboard" =<< jsg "jQuery",
-        jsg1 "DrumKit" =<< jsg "Tone")
+        jsg1 "Keyboard" =<< jsg "jQuery")
 
-    io <- new (tools ! "IOSelector") ()
+    -- XXX hacky DI design
+    makesynth <- eval $ "() => new (" ++ synthmod ++ "(Tone)).Synth()"
+    
+
+    io <- new (tools ! "IOSelector") (makesynth)
 
     void $ (jsg1 "jQuery" =<< (jsg "document" ! "body")) # "append" $ (io ! "widget")
     

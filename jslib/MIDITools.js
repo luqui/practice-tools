@@ -1,4 +1,4 @@
-MIDITools = function($, Keyboard, Synth) {
+MIDITools = function($, Keyboard) {
 
 var $$ = {};
 
@@ -105,9 +105,9 @@ $$.InputSelector = function() {
 };
 
 
-$$.SynthOutput = function() {
+$$.SynthOutput = function(makesynth) {
   this.name = "JS Synth";
-  var synth = new Synth.Synth();
+  var synth = makesynth();
   this.send = dat => synth.send(dat);
   this.widget = $('<span>').text('JS Synth')[0];
 };
@@ -119,12 +119,16 @@ $$.MIDIOutput = function(dev) {
 };
 
 
-$$.OutputSelector = function() {
+$$.OutputSelector = function(makesynth) {
   this.name = "Output Selector";
   this.send = dat => {};
   var self = this;
 
-  var outputs = [new $$.SynthOutput()];
+  var outputs = [];
+  if (makesynth) {
+    outputs.push(new $$.SynthOutput(makesynth));
+  }
+
   var select = $('<select>');
   var container = $('<div>');
   this.widget = $('<div>').append($('<b>').text('Output:'), select, container)[0];
@@ -165,10 +169,10 @@ $$.OutputSelector = function() {
 };
 
 
-$$.IOSelector = function() {
+$$.IOSelector = function(makesynth) {
   var passThru = $('<input>').attr('type', 'checkbox').prop('checked', true);
   var input = new $$.InputSelector();
-  var output = new $$.OutputSelector();
+  var output = new $$.OutputSelector(makesynth);
 
   var replayevent = $$.Event();
 
