@@ -45,22 +45,28 @@ $$.Synth.prototype.noteOn = function(note, vel) {
   }
 
   var drumname = drums[note];
+  var fullname = drumname;
 
   if (vel == 0) {
     return;
   }
   else if (vel < 80) {
-    drumname += "-soft";
+    fullname += "-soft";
     var volume = vel / 80;
   }
   else {
-    drumname += "-loud";
+    fullname += "-loud";
     var volume = 0.7 + 0.3 * (vel-80)/(127-80);
   }
 
-  var player = this.players.get(drumname);
+  var player = this.players.get(fullname);
   player.volume.value = -20 + 20 * volume;
   player.start();
+
+  if (drumname == "hat1" || drumname == "hat2") {
+    this.players.get("hat3-soft").stop();
+    this.players.get("hat3-loud").stop();
+  }
 };
 
 $$.Synth.prototype.send = function(dat) {
