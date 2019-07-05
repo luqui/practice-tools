@@ -81,7 +81,7 @@ parseProd = do
     void $ tok (P.string "=")
     syms <- P.many1 parseSym
     when (not . unique . map fst $ nub [ (name, lab) | Sym name lab <- syms ]) $
-        fail "Invalid production: symbol has multiple lengths"
+        fail $ "Invalid production: label is assigned multiple symbols"
     pure $ Production 
         { prodFilter = filt
         , prodLabel = label
