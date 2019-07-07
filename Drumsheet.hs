@@ -6,7 +6,7 @@ import Control.Arrow (first)
 import Control.Concurrent (forkIO, threadDelay, myThreadId, killThread)
 import Control.DeepSeq (NFData(rnf))
 import Control.Exception (throwTo)
-import Control.Monad (forM, forM_, void, replicateM, when, forever, join)
+import Control.Monad (forM, forM_, void, replicateM, when, join)
 import qualified Control.Monad.Logic as Logic
 import qualified Control.Monad.Random as Rand
 import Control.Monad.Trans.Class (lift)
@@ -37,6 +37,9 @@ instance Semigroup (Phrase a) where
 
 instance Monoid (Phrase a) where
     mempty = Phrase 0 []
+
+phraseLength :: Phrase a -> Time
+phraseLength (Phrase t _) = t
 
 overlay :: Phrase a -> Phrase a -> Phrase a
 overlay (Phrase t es) (Phrase t' es') = Phrase (max t t') (es ++ es')
@@ -197,7 +200,7 @@ instruments = --[ drumkit [36], drumkit [37], drumkit [38,39], drumkit [40,41], 
     where
     drumkit name notes = do
         chosen <- replicateM 5 (Rand.uniform notes)
-        pure $ Instrument name $ \i -> if i == 0 then Nothing else Just $ Note 1 (cycle chosen !! i) (min 127 (i * 15 + 30))
+        pure $ Instrument name $ \i -> if i == 0 then Nothing else Just $ Note 1 (cycle chosen !! i) (min 127 (i * 20 + 30))
 
 jquery :: String -> JS.JSM JS.JSVal
 jquery query = do
@@ -238,12 +241,17 @@ main = do
             let r = scale phraseScale $ foldAssoc overlay mempty phrases
             rnf r `seq` pure r
 
-    let play = do
+    let play starttime = do
+            waitUntil starttime
             nextPhrase <- readIORef nextPhraseRef
             void . forkIO $ writeIORef nextPhraseRef =<< genphrase "init"
-            now <- Clock.getCurrentTime
-            playPhrase conn now nextPhrase
-            waitUntil (addSeconds 0.1 now)  -- to prevent spamming of emptiness
+            playPhrase conn starttime nextPhrase
+            let phraselen = realToFrac (phraseLength nextPhrase)
+            -- to prevent spamming of emptiness
+            let nexttime
+                  | phraselen < 0.1 = addSeconds 0.1 starttime
+                  | otherwise = addSeconds phraselen starttime
+            play nexttime
 
     --void $ jquery "#drumsheet" JS.# "keyup" $ JS.fun $ \_ _ _ -> abortFail $ do 
     --    grammar <- join $ either (fail.show) pure <$> loadConfig
@@ -252,7 +260,7 @@ main = do
     let playcb = do
             tid <- forkIO $ do
                 writeIORef nextPhraseRef =<< genphrase "intro"
-                forever play
+                play =<< Clock.getCurrentTime
             writeIORef playThreadIdRef (Just tid)
     let stopcb = do
             tidMay <- readIORef playThreadIdRef

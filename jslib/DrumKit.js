@@ -20,7 +20,7 @@ var drums = {
 
 $$.Synth = function() {
   this.players = new Tone.Players().toMaster();
-  this.players.volume.value = 0;
+  this.players.volume.value = 10;
   this.loadSamples();
 };
 
