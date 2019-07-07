@@ -14,7 +14,7 @@
     <script language="javascript">
      function show_error(error) {
        $('#container').addClass('error');
-       $('#status').text(error);
+       $('#status').text('Error:\n' + error);
      }
      function hide_error() {
        $('#container').removeClass('error');
@@ -56,22 +56,54 @@
        load_from_url();
 
 
+       var update_button = function() {
+         if (!playing) {
+           $('#run').text('Play');
+           $('#run').attr('mode', 'play');
+         }
+         else if (changed) {
+           $('#run').text('Reload');
+           $('#run').attr('mode', 'reload');
+         }
+         else {
+           $('#run').text('Stop');
+           $('#run').attr('mode', 'stop');
+         }
+       };
+
+       var button_action = function() {
+         if (changed) {
+           reload(
+             () => { 
+               changed = false;
+               ensure_playing();
+               update_button();
+               hide_error();
+               update_url(); }, 
+             e  => {
+               changed = false;
+               update_button();
+               show_error(e) 
+             });
+         }
+         else {
+           toggle_play();
+           update_button();
+         }
+       };
+
        $('#drumsheet').keydown(e => {
          if (e.which == 13 && e.shiftKey) {
-           if (changed) {
-             reload(
-               () => { ensure_playing(); changed = false; hide_error(); update_url(); }, 
-               e  => { changed = false; show_error(e) });
-           }
-           else {
-             toggle_play();
-           }
+           button_action();
            return false;
          }
          else {
            changed = true;
+           update_button();
          }
        });
+
+       $('#run').click(e => { button_action() });
      }
     </script>
 
@@ -103,6 +135,22 @@
       min-height: 40px;
       display: none;
       font-size: 12pt;
+      margin: 0;
+    }
+    #run {
+      font-size: 30pt;
+      position: absolute;
+      right: 10px;
+      top: 10px;
+    }
+    #run[mode="play"] {
+      background: green;
+    }
+    #run[mode="stop"] {
+      background: red;
+    }
+    #run[mode="reload"] {
+      background: orange;
     }
     .error #status {
       display: block;
@@ -111,6 +159,7 @@
   </head>
   <body>
    <div id="container">
+     <pre id="status" class="hidden"></pre>
      <textarea id="drumsheet">
 tempo 4*90
 
@@ -159,9 +208,8 @@ init = A:bar
 // bar = [2/1](A:bar A:bar)
 
 </textarea>
-     <pre id="status" class="hidden"></pre>
    </div>
-   <button id="run">Run</button>
+   <button id="run" mode="play">Play</button>
   </body>
   <script language="javascript" src="Drumsheet.jsexe/runmain.js" defer></script>
 </html>
