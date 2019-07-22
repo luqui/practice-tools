@@ -243,7 +243,7 @@ main = do
     nextPhraseRef <- newIORef mempty
     playThreadIdRef <- newIORef Nothing
 
-    conn <- MIDI.makeOutput "DrumKit"
+    conn <- MIDI.makeOutput =<< JS.jsg "MIDI_INTERFACE"
 
     let genphrase startsym = do
             grammar <- readIORef grammarRef
