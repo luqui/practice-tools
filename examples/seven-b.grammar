@@ -1,0 +1,34 @@
+tempo 4*90
+
+[snare] intro = +.-.-.-. -.-.-.
+init = A:phrase A:phrase
+phrase = A:bar A:bar A:bar A:bar
+phrase = A:bar B:bar A:bar B:bar
+phrase = A:bar B:bar C:bar D:bar
+[crash] init = *
+bar = A:8 B:6
+bar = A:6 B:8
+bar = A:7 B:7
+[kick] 8 = +... +...
+[kick] 6 = +... +.
+[kick] 8 = +..- +..-
+[kick] 6 = +..- +.
+[kick] 8 = +... ..+.
+[kick] 6 = +... ..
+[kick] 8 = +... ....
+[snare] 8 = .... +...
+[snare] 6 = .... +.
+[snare] 8 = ..+. ....
+[snare] 6 = ..+. ..
+[snare] 8 = .... ..+.
+[hat ride] 8 = ..+. ..+.
+[hat ride] 6 = ..+. ..
+[hat ride] 8 = +... +...
+[hat ride] 6 = +... +.
+[hat ride] 8 = -.-. +-.-
+[hat ride] 6 = .-.- .-
+[kick snare] 7 = +... +..
+[kick snare] 7 = +.. +...
+[hst ride] 7 = -.-.-.-
+[hat ride] 7 = .-.-.-. 
+

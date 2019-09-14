@@ -211,6 +211,17 @@ init = A:bar
 </textarea>
    </div>
    <button id="run" mode="play">Play</button>
+   <div id="interface">
+   </div>
   </body>
+  <script defer>
+  (() => {
+    var tools = MIDITools(jQuery, Keyboard(jQuery));
+    var outp = new tools.OutputSelector(() => new (DrumKit(Tone).Synth)());
+    $('#interface').append(outp.widget);
+    // To communicate to haskell segment
+    MIDI_INTERFACE = outp;
+  })();
+  </script>
   <script language="javascript" src="Drumsheet.jsexe/runmain.js" defer></script>
 </html>

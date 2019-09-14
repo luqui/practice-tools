@@ -1,0 +1,120 @@
+TFAE:
+
+    init = A:bar B:bar
+    init = bar bar
+
+TFAE:
+
+    init = A:bar A
+    init = A:bar A:bar
+    init = A A:bar
+    init = {A:bar} A A   // maybe
+
+Overlay `&` - compute both patterns and merge.  Length is the length of the
+longer one.  TFAE:
+
+    intro = hat(..+. ..+.)
+          & kick(+... ....)
+          & snare(.... +...)
+    intro = kick(+) . hat(+) . snare(+) . hat(+) .
+    intro = kick(+)... snare(+)... 
+          & hat(..+. ..+.)
+
+If we want the kick and snare to play a `bar` together: (TFAE)
+
+    bar = kick(A:bar) & snare(A:bar)
+    bar = (kick & snare)(A:bar)
+
+or if we want them to each compute their own bar: (TFAE)
+
+    bar = kick(A:bar) & snare(B:bar)
+    bar = (kick & snare)(bar)   // note lack of label
+
+Alternate `|` - choose one or the other rule: (TFAE)
+
+    bar = kick(+... ...-) | kick(+... .+.-)
+
+    // Alternation is how multiple specification is interpreted
+    bar = kick(+... ...-)
+    bar = kick(+... .+.-)
+
+Weighted alternation:
+
+    bar = [75%] kick(+... ...-) | [25%] kick (..+. .-+.)
+
+    75% bar = kick(+... ...-)
+    25% bar = kick(..+. .-+-)
+
+Unspecified weights default to `100%`.
+
+    bar = kick(+... +...)
+    bar = [50%] kick(+... ....)
+
+This will pick the second rule 1/3 of the time.
+
+Alternatives are flattened before probability is computed.
+
+    bar = kick(+... ...-) | kick(..+. .-+.)
+    bar = kick(+..- .-.-)
+
+    bar = kick(+... ...-) | kick(..+. .-+.) | kick(+..- .-.-)
+
+Think of each rule being packed with a weight, and `|` is a weight-preserving
+alternation.  (Is this an efficiency problem?! -- I think there is a way
+through: add up the "total possible weight" of a production, we needn't explore
+all alternatives to do this.)
+
+Choice of instrument may be deferred:
+
+    bar = (kick & snare)(8 8)
+    8 = +... +... | ..+. ..+.
+
+Uninterpreted non-silence is a warning.
+
+Instrument filters:
+
+    bar = (kick & snare & hat)(8 8)
+    8 = [kick] +... .... | [snare|hat] .... +....
+
+    bar = 8 8
+    8 = kick(+...) (snare(+...) & hat(+...))
+
+WTF?
+
+    8 = [snare | 50%] .... +...
+
+I think this means snare gets 100% weight, all other instruments get 50% weight.
+We can see weight as a filter, that 50% of the time the rule is valid, WITH
+rule search being conditional on the fact that we always find a valid rule.
+This is not as complicated to interpret as it looks, because by the time
+we elaborate `8`, we already know what instrument we are focusing on.  However,
+we need to consider what happens when weights and instrument selection collide:
+
+    bar = (kick & snare)(8)
+    8 = [kick] +... .... | [50%] .... +...
+
+Following the obvious laws we have:
+
+    bar = kick(8) & snare(8)
+    bar = kick([kick] +... .... | [50%] .... +...) 
+        & snare([kick] +... .... | [50%] .... +...)
+    bar = (kick([kick] +... ....) | kick([50%] .... +...))
+        & (snare([kick] +... ....) | [50%] .... +...)
+    bar = (kick(+... ....) | kick([50%] .... +...))
+        & snare([50%] .... +...)
+    bar = (kick(+... ....) | [50%] kick(.... +...))
+        & snare([50%] .... +...)
+    bar = (kick(+... ....) & [50%] snare( .... +...))
+        | ([50%] kick(.... +...) & [50%] snare(.... +...))
+    bar = [50%] (kick(+... ....) & snare(.... +...))
+        | [25%] (kick(.... +...) & snare(.... +...))
+
+Thus `bar`'s total weight is `75%`.  How the heck are we supposed to compute
+that?
+
+    w(bar) = w([kick]8) * w([snare]8)
+    w([kick]8) = 150%
+    w([snare]8) = 50%
+    w(bar) = 75%
+
+Ok, that's not too bad.  Still more complicated that I would hope.

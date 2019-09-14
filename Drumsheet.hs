@@ -54,8 +54,13 @@ sortPhrase (Phrase len evs) = Phrase len (sortBy (comparing fst) evs)
 joinMaybe :: Phrase (Maybe a) -> Phrase a
 joinMaybe (Phrase t es) = Phrase t (catMaybes (map sequenceA es))
 
+data Terminal
+    = TermVel Int
+    | TermRand
+    deriving (Show)
+
 data Sym = Sym String String
-         | Terminal Int
+         | Terminal Terminal
          | Group [Sym]
          | Rescale Sym Rational
     deriving (Show)
@@ -121,13 +126,14 @@ parseProd = do
 
     parseName = (:[]) <$> P.oneOf ['A'..'Z']
 
-    parseVel :: Parser Int
+    parseVel :: Parser Terminal
     parseVel = P.choice
-        [ 0 <$ P.char '.'
-        , 1 <$ P.char '-'
-        , 2 <$ P.char '+'
-        , 3 <$ P.char '*'
-        , 4 <$ P.char '#'
+        [ TermVel 0 <$ P.char '.'
+        , TermVel 1 <$ P.char '-'
+        , TermVel 2 <$ P.char '+'
+        , TermVel 3 <$ P.char '*'
+        , TermVel 4 <$ P.char '#'
+        , TermRand <$ P.char '?'
         ]
 
     parseLabel :: Parser String
@@ -171,7 +177,14 @@ renderProduction chooseProd prodname depth = (`State.evalStateT` Map.empty) $ do
     prod <- lift $ chooseProd prodname
     fmap mconcat (traverse renderSym (prodSyms prod))
     where
-    renderSym (Terminal v) = pure $ Phrase 1 [(0,v)]
+    renderSym (Terminal (TermVel v)) = pure $ Phrase 1 [(0,v)]
+    renderSym (Terminal TermRand) = lift.lift $ Phrase 1 . (:[]) . (0,) <$> Rand.weighted
+        [ (0, 25)
+        , (1, 16)
+        , (2, 9)
+        , (3, 4)
+        , (4, 1)
+        ]
     renderSym (Sym name label) = do
         pad <- State.get
         case Map.lookup name pad of
@@ -233,7 +246,7 @@ main = do
     nextPhraseRef <- newIORef mempty
     playThreadIdRef <- newIORef Nothing
 
-    conn <- MIDI.makeOutput "DrumKit"
+    conn <- MIDI.makeOutput =<< JS.jsg "MIDI_INTERFACE"
 
     let genphrase startsym = do
             grammar <- readIORef grammarRef

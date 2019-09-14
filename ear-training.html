@@ -71,6 +71,18 @@
      <td id="lives">0</td>
     </tr>
    </table>
+   <div id="interface">
+   </div>
   </body>
+  <script defer>
+    (() => {
+      var tools = MIDITools(jQuery, Keyboard(jQuery));
+      var selector = new tools.IOSelector(() => new (Synth(Tone).Synth)());
+      $('#interface').append(selector.widget);
+      
+      // to communicate to haskell thread
+      MIDI_INTERFACE = selector;
+    })();
+  </script>
   <script language="javascript" src="EarTraining.jsexe/runmain.js" defer></script>
 </html>
