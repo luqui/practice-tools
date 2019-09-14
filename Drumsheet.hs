@@ -47,6 +47,9 @@ overlay (Phrase t es) (Phrase t' es') = Phrase (max t t') (es ++ es')
 scale :: Rational -> Phrase a -> Phrase a
 scale r (Phrase len evs) = Phrase (len * r) (map (first (*r)) evs)
 
+sortPhrase :: Phrase a -> Phrase a
+sortPhrase (Phrase len evs) = Phrase len (sortBy (comparing fst) evs)
+
 -- filter out nothings
 joinMaybe :: Phrase (Maybe a) -> Phrase a
 joinMaybe (Phrase t es) = Phrase t (catMaybes (map sequenceA es))
@@ -238,7 +241,8 @@ main = do
             instrs <- Rand.evalRandIO (sequenceA instruments)
             phrases <- forM instrs $ \instr -> do
                 fmap (foldAssoc overlay mempty) . Rand.evalRandIO $ Logic.observeManyT 1 (renderGrammar startsym grammar instr)
-            let r = scale phraseScale $ foldAssoc overlay mempty phrases
+            -- is sortPhrase even necessary?
+            let r = sortPhrase . scale phraseScale $ foldAssoc overlay mempty phrases
             rnf r `seq` pure r
 
     let play starttime = do
@@ -293,7 +297,7 @@ addSeconds diff base = Clock.addUTCTime (realToFrac diff) base
 
 playPhrase :: MIDI.Output -> Clock.UTCTime -> Phrase Note -> IO ()
 playPhrase _ _ (Phrase _ []) = pure ()
-playPhrase conn offset (Phrase len (sortBy (comparing fst) -> evs)) = do
+playPhrase conn offset (Phrase len evs) = do
     forM_ (zip evs (map fst (tail evs) ++ [len])) $ \((t,Note ch note vel),t') -> do
         waitUntil (addSeconds t offset)
         MIDI.sendEvent conn (MIDI.NoteOn ch note vel)

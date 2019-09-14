@@ -79,11 +79,12 @@
                ensure_playing();
                update_button();
                hide_error();
-               update_url(); }, 
+               update_url();
+             }, 
              e  => {
                changed = false;
                update_button();
-               show_error(e) 
+               show_error(e);
              });
          }
          else {
