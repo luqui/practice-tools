@@ -262,6 +262,10 @@ main = do
     --    writeIORef grammarRef grammar
 
     let playcb = do
+            -- Maybe the clock is implemented badly in ghcjs?
+            t <- Clock.getCurrentTime
+            rnf t `seq` pure ()
+
             tid <- forkIO $ do
                 writeIORef nextPhraseRef =<< genphrase "intro"
                 play =<< Clock.getCurrentTime
