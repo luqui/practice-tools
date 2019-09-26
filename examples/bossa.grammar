@@ -1,6 +1,7 @@
-tempo 100*4
+tempo 90*4
 
-[snare] intro = -.-.-.-.
+[snare] intro = -.-.-.-.  A:bar A:bar
+[kick ride hat tom] intro = ........ A:bar A:bar
 
 // blue bossa
 //[kick ride hat snare tom] init = A:bar A:bar A:bar A:bar A:bar A:bar A:bar B:fill
@@ -9,10 +10,10 @@ tempo 100*4
 //[kick ride hat snare tom] init = .
 
 // spain
-[kick ride hat snare tom] init = A:bar A:bar A:bar A:bar A:bar A:bar A:bar A:bar A:bar A:bar A:bar B:fill
-[kick ride hat snare tom] init = A:bar B:bar A:bar B:bar A:bar B:bar A:bar B:bar A:bar B:bar A:bar C:fill
-[kick ride hat snare tom] init = A:bar B:bar C:bar D:bar E:bar F:bar G:bar H:bar I:bar J:bar K:bar L:fill
-[kick ride hat snare tom] init = .
+//[kick ride hat snare tom] init = A:bar A:bar A:bar A:bar A:bar A:bar A:bar A:bar A:bar A:bar A:bar B:fill
+//[kick ride hat snare tom] init = A:bar B:bar A:bar B:bar A:bar B:bar A:bar B:bar A:bar B:bar A:bar C:fill
+//[kick ride hat snare tom] init = A:bar B:bar C:bar D:bar E:bar F:bar G:bar H:bar I:bar J:bar K:bar L:fill
+//[kick ride hat snare tom] init = .
 
 // song for my father
 // [kick ride hat snare tom] init = A:bar A:bar A:bar C:fill A:bar A:bar A:bar C:fill B:bar B:bar B:bar D:fill
@@ -21,7 +22,18 @@ tempo 100*4
 // wave
 // [kick ride hat snare tom] init = A:bar A:bar A:bar A:bar A:bar B:fill A:bar A:bar A:bar A:bar A:bar B:fill C:bar C:bar C:bar D:fill A:bar A:bar A:bar A:bar A:bar E:fill
 
+// for my ears i'm grateful
+a = A:bar A:bar A:bar F:fill A:bar A:bar A:bar B:bar H:hits F:fill
+b = A:bar A:bar A:bar A:bar A:bar A:bar A:bar H:hits
+c = A:bar A:bar H:hits A:bar
+[kick snare ride hat tom] init = A:a A:a B:b C:c
+[kick snare ride hat tom] init = .
+
 [crash] init = #
+
+hits = +..+ ..+. .... ....
+hits = A:fill
+
 bar = A:8 B:8
 fill = A:bar
 fill = A:8 ++.+ .+.+
