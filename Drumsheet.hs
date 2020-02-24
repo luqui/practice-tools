@@ -63,6 +63,7 @@ data Sym = Sym String String
          | Terminal Terminal
          | Group [Sym]
          | Rescale Sym Rational
+         | Pickup Sym
     deriving (Show)
          
 data Production = Production 
@@ -122,6 +123,7 @@ parseProd = do
         , Group <$ tok (P.char '(') <*> P.many parseSym <* tok (P.char ')')
         , (\a b s -> Rescale s (fromIntegral a % fromIntegral b))
             <$ tok (P.char '[') <*> parseNum <* tok (P.char '/') <*> parseNum <* tok (P.char ']') <*> parseSym
+        , Pickup <$ tok (P.char '\\') <*> parseSym
         ]
 
     parseName = (:[]) <$> P.oneOf ['A'..'Z']
@@ -195,6 +197,9 @@ renderProduction chooseProd prodname depth = (`State.evalStateT` Map.empty) $ do
             Just rendered -> pure rendered
     renderSym (Group sym) = fmap mconcat (traverse renderSym sym)
     renderSym (Rescale sym a) = fmap (scale (recip a)) $ renderSym sym
+    renderSym (Pickup sym) = do
+        Phrase t es <- renderSym sym
+        pure $ Phrase 0 (map (first (subtract t)) es)
                     
 renderGrammar :: String -> Grammar -> Instrument -> Logic.LogicT Cloud (Phrase Note)
 renderGrammar startsym grammar (Instrument trackname rendervel) = do
