@@ -21,23 +21,23 @@
        $('#status').text('');
      }
 
-     function install_handlers(play, stop, reload) {
+     function install_handlers(api) {
        var playing = false;
        var changed = true;
       
        var toggle_play = function() {
          if (playing) {
-           stop();
+           api.stop();
            playing = false;
          }
          else {
-           play();
+           api.play();
            playing = true;
          }
        };
        var ensure_playing = function() {
          if (!playing) {
-           play();
+           api.play();
            playing = true;
          }
        };
@@ -73,7 +73,7 @@
 
        var button_action = function() {
          if (changed) {
-           reload(
+           api.reload(
              () => { 
                changed = false;
                ensure_playing();

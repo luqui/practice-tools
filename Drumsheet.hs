@@ -6,7 +6,7 @@ import Control.Arrow (first, (&&&))
 import Control.Concurrent (forkIO, threadDelay, myThreadId, killThread)
 import Control.DeepSeq (NFData(rnf))
 import Control.Exception (throwTo)
-import Control.Monad (forM, forM_, void, replicateM, when, join)
+import Control.Monad (forM, forM_, void, replicateM, when, join, (<=<))
 import qualified Control.Monad.Logic as Logic
 import qualified Control.Monad.Random as Rand
 import Control.Monad.Trans.Class (lift)
@@ -18,6 +18,7 @@ import qualified Data.Map as Map
 import Data.Maybe (catMaybes)
 import Data.Ord (comparing)
 import Data.Ratio ((%))
+import Data.String (fromString)
 import qualified Data.Time.Clock as Clock
 import GHC.Generics (Generic)
 import System.Exit (ExitCode(ExitSuccess))
@@ -319,7 +320,7 @@ main = do
                 alts <- concat <$> replicateM 50 (Logic.observeManyT 1 (renderGrammar startsym grammar instr))
 
                 let ranges = Map.unionsWith minmax (fmap (\x -> (x,x)) . getAttrs <$> alts)
-                let normalize = Map.mapWithKey (\k v -> let (a,z) = ranges Map.! k in (v-a)/(z-a))
+                let normalize = Map.mapWithKey (\k v -> let (a,z) = ranges Map.! k in if z == a then 0 else (v-a)/(z-a))
 
                 let compWeight (AnnoPhrase attrs _) = 1.1 ** fromRational (sum (Map.intersectionWith (*) (gAttrs grammar) (normalize attrs)))
 
@@ -347,36 +348,35 @@ main = do
                 writeIORef nextPhraseRef =<< genphrase "init"
             play =<< play1 starttime nextPhrase
 
-    --void $ jquery "#drumsheet" JS.# "keyup" $ JS.fun $ \_ _ _ -> abortFail $ do 
-    --    grammar <- join $ either (fail.show) pure <$> loadConfig
-    --    writeIORef grammarRef grammar
+    api <- JS.create
+    setProp' api "play" <=< JS.toJSVal $ JS.fun $ \_ _ _ -> do
+        tid <- forkIO $ do
+            writeIORef nextPhraseRef =<< genphrase "init"
+            intro <- genphrase "intro"
+            t <- rnf intro `seq` Clock.getCurrentTime
+            play =<< play1 t intro
+        writeIORef playThreadIdRef (Just tid)
+    setProp' api "stop" <=< JS.toJSVal $ JS.fun $ \_ _ _ -> do
+        tidMay <- readIORef playThreadIdRef
+        case tidMay of
+            Nothing -> pure ()
+            Just tid -> do
+                writeIORef playThreadIdRef Nothing
+                killThread tid
+    setProp' api "reload" <=< JS.toJSVal $ JS.fun $ \_ _ [successcb, errcb] -> do
+        grammarE <- loadConfig
+        case grammarE of
+            Left err -> do
+                void . join $ JS.call errcb <$> JS.jsg "window" <*> pure [show err]
+            Right grammar -> do
+                writeIORef grammarRef grammar
+                void . forkIO $ writeIORef nextPhraseRef =<< genphrase "init"
+                void . join $ JS.call successcb <$> JS.jsg "window" <*> pure ()
+    
+    void $ JS.jsg1 "install_handlers" api
 
-    let playcb = do
-            tid <- forkIO $ do
-                writeIORef nextPhraseRef =<< genphrase "init"
-                intro <- genphrase "intro"
-                t <- rnf intro `seq` Clock.getCurrentTime
-                play =<< play1 t intro
-            writeIORef playThreadIdRef (Just tid)
-    let stopcb = do
-            tidMay <- readIORef playThreadIdRef
-            case tidMay of
-                Nothing -> pure ()
-                Just tid -> do
-                    writeIORef playThreadIdRef Nothing
-                    killThread tid
-    let reloadcb [successcb, errcb] = do
-            grammarE <- loadConfig
-            case grammarE of
-                Left err -> do
-                    void . join $ JS.call errcb <$> JS.jsg "window" <*> pure [show err]
-                Right grammar -> do
-                    writeIORef grammarRef grammar
-                    void . forkIO $ writeIORef nextPhraseRef =<< genphrase "init"
-                    void . join $ JS.call successcb <$> JS.jsg "window" <*> pure ()
-        reloadcb _ = fail "Wrong number of arguments to reloadcb"
-            
-    void $ JS.jsg3 "install_handlers" (JS.fun (\_ _ _ -> playcb)) (JS.fun (\_ _ _ -> stopcb)) (JS.fun (\_ _ -> reloadcb))
+setProp' :: JS.Object -> String -> JS.JSVal -> JS.JSM ()
+setProp' obj prop val = JS.setProp (fromString prop) val obj
 
 consoleLog :: JS.JSVal -> IO ()
 consoleLog v = void $ JS.jsg "console" JS.# "log" $ [v]
