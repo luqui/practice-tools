@@ -76,6 +76,9 @@ unAnnotate (AnnoPhrase _ p) = p
 addAttrs :: Map.Map String Rational -> AnnoPhrase a -> AnnoPhrase a
 addAttrs attrs p = AnnoPhrase attrs mempty <> p
 
+getAttrs :: AnnoPhrase a -> Map.Map String Rational
+getAttrs (AnnoPhrase attrs _) = attrs
+
 data Terminal
     = TermVel Int
     | TermRand
@@ -294,6 +297,9 @@ foldAssoc f z xs = foldAssoc f z (pairUp xs)
     pairUp [x] = [x]
     pairUp (x:y:xs') = f x y : pairUp xs'
 
+minmax :: (Ord a, Ord b) => (a,b) -> (a,b) -> (a,b)
+minmax (a,z) (a',z') = (min a a', max z z')
+
 main :: IO ()
 main = do
     mainThread <- myThreadId
@@ -309,13 +315,17 @@ main = do
             grammar <- readIORef grammarRef
             let phraseScale = 60 / fromIntegral (gTempo grammar)
             instrs <- Rand.evalRandIO (sequenceA instruments)
-            phrases <- forM instrs $ \instr -> do
-                alts <- concat <$> Rand.evalRandIO (replicateM 50 (Logic.observeManyT 1 (renderGrammar startsym grammar instr)))
+            phrases <- forM instrs $ \instr -> Rand.evalRandIO $ do
+                alts <- concat <$> replicateM 50 (Logic.observeManyT 1 (renderGrammar startsym grammar instr))
 
-                let compWeight (AnnoPhrase attrs _) = 1.01 ** fromRational (sum (Map.intersectionWith (*) (gAttrs grammar) attrs))
+                let ranges = Map.unionsWith minmax (fmap (\x -> (x,x)) . getAttrs <$> alts)
+                let normalize = Map.mapWithKey (\k v -> let (a,z) = ranges Map.! k in (v-a)/(z-a))
+
+                let compWeight (AnnoPhrase attrs _) = 1.1 ** fromRational (sum (Map.intersectionWith (*) (gAttrs grammar) (normalize attrs)))
+
                 if null alts
                     then pure []
-                    else pure <$> Rand.evalRandIO (weighted (map (id &&& compWeight) alts))
+                    else pure <$> weighted (map (id &&& compWeight) alts)
 
             -- is sortPhrase even necessary?
             let r = sortPhrase . scale phraseScale $ foldAssoc overlay mempty (unAnnotate <$> join phrases)
