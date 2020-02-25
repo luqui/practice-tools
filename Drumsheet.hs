@@ -29,6 +29,12 @@ import qualified Language.Javascript.JSaddle as JS
 
 type Time = Rational
 
+class PhraseLike p where
+    phraseLength :: p a -> Time
+    overlay :: p a -> p a -> p a
+    scale :: Rational -> p a -> p a
+    joinMaybe :: p (Maybe a) -> p a
+
 data Phrase a = Phrase Time [(Time, a)]
     deriving (Functor, Show, Generic, NFData)
 
@@ -38,21 +44,34 @@ instance Semigroup (Phrase a) where
 instance Monoid (Phrase a) where
     mempty = Phrase 0 []
 
-phraseLength :: Phrase a -> Time
-phraseLength (Phrase t _) = t
-
-overlay :: Phrase a -> Phrase a -> Phrase a
-overlay (Phrase t es) (Phrase t' es') = Phrase (max t t') (es ++ es')
-
-scale :: Rational -> Phrase a -> Phrase a
-scale r (Phrase len evs) = Phrase (len * r) (map (first (*r)) evs)
+instance PhraseLike Phrase where
+    phraseLength (Phrase t _) = t
+    overlay (Phrase t es) (Phrase t' es') = Phrase (max t t') (es ++ es')
+    scale r (Phrase len evs) = Phrase (len * r) (map (first (*r)) evs)
+    joinMaybe (Phrase t es) = Phrase t (catMaybes (map sequenceA es))
 
 sortPhrase :: Phrase a -> Phrase a
 sortPhrase (Phrase len evs) = Phrase len (sortBy (comparing fst) evs)
 
--- filter out nothings
-joinMaybe :: Phrase (Maybe a) -> Phrase a
-joinMaybe (Phrase t es) = Phrase t (catMaybes (map sequenceA es))
+
+data AnnoPhrase a = AnnoPhrase (Map.Map String Rational) (Phrase a)
+    deriving (Functor, Show, Generic, NFData)
+
+instance Semigroup (AnnoPhrase a) where
+    AnnoPhrase e p <> AnnoPhrase e' p' = AnnoPhrase (Map.unionWith (+) e e') (p <> p')
+
+instance Monoid (AnnoPhrase a) where
+    mempty = AnnoPhrase Map.empty mempty
+
+instance PhraseLike AnnoPhrase where
+    phraseLength (AnnoPhrase _ p) = phraseLength p
+    overlay (AnnoPhrase e p) (AnnoPhrase e' p') = AnnoPhrase (Map.unionWith (+) e e') (overlay p p')
+    scale s (AnnoPhrase e p) = AnnoPhrase (Map.adjust (/s) "speed" e) (scale s p)
+    joinMaybe (AnnoPhrase e p) = AnnoPhrase e (joinMaybe p)
+
+unAnnotate :: AnnoPhrase a -> Phrase a
+unAnnotate (AnnoPhrase _ p) = p
+
 
 data Terminal
     = TermVel Int
@@ -173,19 +192,23 @@ shuffle xs = do
     n <- Rand.getRandomR (0, length xs - 1)
     ((xs !! n) :) <$> shuffle (take n xs <> drop (n+1) xs)
 
-renderProduction :: (String -> Logic.LogicT Cloud Production) -> String -> Int -> Logic.LogicT Cloud (Phrase Int)
+renderProduction :: (String -> Logic.LogicT Cloud Production) -> String -> Int -> Logic.LogicT Cloud (AnnoPhrase Int)
 renderProduction _ _ 0 = empty
 renderProduction chooseProd prodname depth = (`State.evalStateT` Map.empty) $ do
     prod <- lift $ chooseProd prodname
     fmap mconcat (traverse renderSym (prodSyms prod))
     where
-    renderSym (Terminal (TermVel v)) = pure $ Phrase 1 [(0,v)]
-    renderSym (Terminal TermRand) = lift.lift $ Phrase 1 . (:[]) . (0,) <$> Rand.weighted
-        [ (0, 25)
-        , (1, 16)
-        , (2, 9)
-        , (3, 4)
-        , (4, 1)
+    baseVPhrase v
+        | v == 0 = AnnoPhrase Map.empty $ Phrase 1 [(0,v)]
+        | otherwise = AnnoPhrase (Map.fromList [("density", 1), ("volume", fromIntegral v)]) $ Phrase 1 [(0,v)]
+
+    renderSym (Terminal (TermVel v)) = pure $ baseVPhrase v
+    renderSym (Terminal TermRand) = lift.lift $ Rand.weighted
+        [ (baseVPhrase 0, 25)
+        , (baseVPhrase 1, 16)
+        , (baseVPhrase 2, 9)
+        , (baseVPhrase 3, 4)
+        , (baseVPhrase 4, 1)
         ]
     renderSym (Sym name label) = do
         pad <- State.get
@@ -198,10 +221,10 @@ renderProduction chooseProd prodname depth = (`State.evalStateT` Map.empty) $ do
     renderSym (Group sym) = fmap mconcat (traverse renderSym sym)
     renderSym (Rescale sym a) = fmap (scale (recip a)) $ renderSym sym
     renderSym (Pickup sym) = do
-        Phrase t es <- renderSym sym
-        pure $ Phrase 0 (map (first (subtract t)) es)
+        AnnoPhrase e (Phrase t es) <- renderSym sym
+        pure $ AnnoPhrase e (Phrase 0 (map (first (subtract t)) es))
                     
-renderGrammar :: String -> Grammar -> Instrument -> Logic.LogicT Cloud (Phrase Note)
+renderGrammar :: String -> Grammar -> Instrument -> Logic.LogicT Cloud (AnnoPhrase Note)
 renderGrammar startsym grammar (Instrument trackname rendervel) = do
     joinMaybe . fmap rendervel <$> renderProduction chooseProd startsym 10
     where
@@ -257,10 +280,14 @@ main = do
             grammar <- readIORef grammarRef
             let phraseScale = 60 / fromIntegral (gTempo grammar)
             instrs <- Rand.evalRandIO (sequenceA instruments)
-            phrases <- forM instrs $ \instr -> do
-                fmap (foldAssoc overlay mempty) . Rand.evalRandIO $ Logic.observeManyT 1 (renderGrammar startsym grammar instr)
+            phrases <- forM instrs $ \instr -> Rand.evalRandIO $ do
+                alts <- Logic.observeManyT 50 (renderGrammar startsym grammar instr)
+                -- TODO choose annophrase
+                if null alts
+                    then pure []
+                    else fmap (pure.unAnnotate) . Rand.weighted $ map (, 1) alts
             -- is sortPhrase even necessary?
-            let r = sortPhrase . scale phraseScale $ foldAssoc overlay mempty phrases
+            let r = sortPhrase . scale phraseScale $ foldAssoc overlay mempty (join phrases)
             rnf r `seq` pure r
 
     let play starttime = do
