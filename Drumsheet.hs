@@ -168,7 +168,9 @@ parseProd = do
     parseLabel = tok (P.many1 P.alphaNum)
 
     parseProdAttrs :: Parser (Map.Map String Rational)
-    parseProdAttrs = Map.fromList <$> P.many ((,) <$> tok (P.many1 P.alphaNum) <* P.char '=' <*> tok parseNumber)
+    parseProdAttrs = Map.fromList <$> P.many ((,) <$> tok (P.many1 P.alphaNum) <*> eqClause)
+        where
+        eqClause = P.option 1 $ P.char '=' *> tok parseNumber
 
 comment :: Parser ()
 comment = void $ tok (P.string "//") *> P.many (P.satisfy (/= '\n'))
