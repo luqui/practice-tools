@@ -2,7 +2,7 @@
 {-# LANGUAGE DeriveFunctor, TupleSections, ViewPatterns, LambdaCase, ScopedTypeVariables, DeriveGeneric, DeriveAnyClass #-}
 
 import Control.Applicative
-import Control.Arrow (first)
+import Control.Arrow (first, (&&&))
 import Control.Concurrent (forkIO, threadDelay, myThreadId, killThread)
 import Control.DeepSeq (NFData(rnf))
 import Control.Exception (throwTo)
@@ -12,7 +12,7 @@ import qualified Control.Monad.Random as Rand
 import Control.Monad.Trans.Class (lift)
 import qualified Control.Monad.Trans.State as State
 import Data.Foldable (asum)
-import Data.List (nub, sortBy)
+import Data.List (nub, sortBy, maximumBy)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import qualified Data.Map as Map
 import Data.Maybe (catMaybes)
@@ -21,8 +21,10 @@ import Data.Ratio ((%))
 import qualified Data.Time.Clock as Clock
 import GHC.Generics (Generic)
 import System.Exit (ExitCode(ExitSuccess))
+import System.IO.Unsafe (unsafePerformIO)
 import qualified System.Posix.Signals as Sig
 import qualified Text.Parsec as P
+import Text.Read (readMaybe)
 
 import qualified JSMIDI as MIDI
 import qualified Language.Javascript.JSaddle as JS
@@ -94,11 +96,12 @@ data Production = Production
 
 data Grammar = Grammar
     { gTempo       :: Int   -- allows "4*90",  quarternote 90bpm
+    , gAttrs       :: Map.Map String Rational
     , gProductions :: [Production]
     } 
 
 emptyGrammar :: Grammar
-emptyGrammar = Grammar (4*100) []
+emptyGrammar = Grammar (4*100) Map.empty []
 
 type Parser = P.Parsec String ()
 
@@ -168,29 +171,43 @@ parseNum = product <$> P.sepBy literal (tok (P.string "*"))
     where
     literal = read <$> tok (P.many1 P.digit)
 
+parseAttrs :: Parser (Map.Map String Rational)
+parseAttrs = fmap Map.fromList . P.many $ tok (P.string "attr " ) *> ((,) <$> tok (P.many1 P.alphaNum) <*> tok number) <* P.newline
+    where
+    number = P.option id (negate <$ P.string "-") <*> readNum
+    readNum = do
+        digs <- P.many1 P.digit
+        case readMaybe digs of
+            Nothing -> fail $ "Bad number: " ++ show digs
+            Just n -> pure (fromIntegral (n :: Integer))
+
 parseGrammar :: Parser Grammar
 parseGrammar = do
     tempo <- tok (P.string "tempo ") *> tok parseNum <* P.newline
+    attrs <- parseAttrs
     prods <- concat <$> P.many (((:[]) <$> parseProd  <|>  [] <$ tok (pure ())) <* P.newline)
-    pure $ Grammar { gTempo = tempo, gProductions = prods }
+    pure $ Grammar { gTempo = tempo, gAttrs = attrs, gProductions = prods }
 
 
 
 
 type Cloud = Rand.Rand Rand.StdGen
 
+weighted :: [(a, Double)] -> Cloud a
+weighted = go 0 (error "weighted: empty list")
+    where
+    go _ a [] = pure a
+    go t a ((x,w):xs) = do
+        r <- Rand.getRandomR (0, t+w)
+        if r <= w
+            then go t x xs
+            else go t a xs
+
 weightedShuffle :: [(a, Rational)] -> Cloud [a]
 weightedShuffle [] = pure []
 weightedShuffle xs = do
     n <- Rand.weighted (zip [0..] (map snd xs))
-    map fst . ((xs !! n) :) <$> shuffle (take n xs <> drop (n+1) xs)
-
-
-shuffle :: [a] -> Cloud [a]
-shuffle [] = pure []
-shuffle xs = do
-    n <- Rand.getRandomR (0, length xs - 1)
-    ((xs !! n) :) <$> shuffle (take n xs <> drop (n+1) xs)
+    (fst (xs !! n) :) <$> weightedShuffle (take n xs <> drop (n+1) xs)
 
 renderProduction :: (String -> Logic.LogicT Cloud Production) -> String -> Int -> Logic.LogicT Cloud (AnnoPhrase Int)
 renderProduction _ _ 0 = empty
@@ -282,11 +299,14 @@ main = do
             instrs <- Rand.evalRandIO (sequenceA instruments)
             phrases <- forM instrs $ \instr -> Rand.evalRandIO $ do
                 alts <- Logic.observeManyT 50 (renderGrammar startsym grammar instr)
-                -- TODO choose annophrase
+                let compWeight (AnnoPhrase attrs _) = 1.01 ** fromRational (sum (Map.intersectionWith (*) (gAttrs grammar) attrs))
                 if null alts
                     then pure []
-                    else fmap (pure.unAnnotate) . Rand.weighted $ map (, 1) alts
+                    else do
+                        r <- weighted $ map (id &&& compWeight) alts
+                        pure (pure (unAnnotate r))
             -- is sortPhrase even necessary?
+
             let r = sortPhrase . scale phraseScale $ foldAssoc overlay mempty (join phrases)
             rnf r `seq` pure r
 
@@ -335,8 +355,8 @@ main = do
             
     void $ JS.jsg3 "install_handlers" (JS.fun (\_ _ _ -> playcb)) (JS.fun (\_ _ _ -> stopcb)) (JS.fun (\_ _ -> reloadcb))
 
--- consoleLog :: JS.JSVal -> IO ()
--- consoleLog v = void $ JS.jsg "console" JS.# "log" $ [v]
+consoleLog :: JS.JSVal -> IO ()
+consoleLog v = void $ JS.jsg "console" JS.# "log" $ [v]
 
 data Note = Note Int Int Int -- ch note vel
     deriving (Show, Generic, NFData)
