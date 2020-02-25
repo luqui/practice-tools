@@ -13,12 +13,14 @@ import Control.Monad.Trans.Class (lift)
 import qualified Control.Monad.Trans.State as State
 import Data.Foldable (asum)
 import Data.List (nub, sortBy)
-import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.IORef (newIORef, readIORef, writeIORef, modifyIORef)
 import qualified Data.Map as Map
 import Data.Maybe (catMaybes)
 import Data.Ord (comparing)
 import Data.Ratio ((%))
+import qualified Data.Set as Set
 import Data.String (fromString)
+import qualified Data.Text as Text
 import qualified Data.Time.Clock as Clock
 import GHC.Generics (Generic)
 import System.Exit (ExitCode(ExitSuccess))
@@ -108,6 +110,11 @@ data Grammar = Grammar
 
 emptyGrammar :: Grammar
 emptyGrammar = Grammar (4*100) Map.empty []
+
+findAttrs :: Grammar -> [String]
+findAttrs g = Set.toList $ builtins <> foldMap (Map.keysSet . prodAttrs) (gProductions g)
+    where
+    builtins = Set.fromList ["density", "volume"]
 
 type Parser = P.Parsec String ()
 
@@ -233,7 +240,7 @@ renderProduction chooseProd prodname depth = (`State.evalStateT` Map.empty) $ do
     where
     baseVPhrase v
         | v == 0 = AnnoPhrase Map.empty $ Phrase 1 [(0,v)]
-        | otherwise = AnnoPhrase (Map.fromList [("density", 1), ("volume", fromIntegral v)]) $ Phrase 1 [(0,v)]
+        | otherwise = AnnoPhrase (Map.fromList [("density", 1), ("volume", fromIntegral (v*v))]) $ Phrase 1 [(0,v)]
 
     renderSym (Terminal (TermVel v)) = pure $ baseVPhrase v
     renderSym (Terminal TermRand) = lift.lift $ Rand.weighted
@@ -372,6 +379,18 @@ main = do
                 writeIORef grammarRef grammar
                 void . forkIO $ writeIORef nextPhraseRef =<< genphrase "init"
                 void . join $ JS.call successcb <$> JS.jsg "window" <*> pure ()
+    setProp' api "getAttrs" <=< JS.toJSVal $ JS.fun $ \_ _ [cb] -> do
+        grammar <- readIORef grammarRef
+        void . join $ JS.call cb <$> JS.jsg "window" <*> JS.toJSVal (findAttrs grammar)
+    setProp' api "setAttrs" <=< JS.toJSVal $ JS.fun $ \_ _ [attrs] -> do
+        attrsO <- JS.makeObject attrs
+        props <- JS.listProps attrsO
+        newAttrs <- fmap Map.fromList . forM props $ \p -> do
+            let k = Text.unpack $ JS.strToText p
+            Just v <- JS.fromJSVal =<< JS.getProp p attrsO
+            pure (k, realToFrac (v :: Double))
+        modifyIORef grammarRef $ \g -> g { gAttrs = newAttrs }
+
     
     void $ JS.jsg1 "install_handlers" api
 

@@ -71,6 +71,26 @@
          }
        };
 
+       var drift = function() {
+           api.getAttrs(attrs => {
+               var attrmap = {};
+               for (k of attrs) {
+                   attrmap[k] = 0;
+               }
+               var interval = () => {
+                   var driftText = '';
+                   for (k in attrmap) {
+                       attrmap[k] += Math.round(Math.random()*20-10);
+                       driftText += k + ': ' + attrmap[k] + '\n';
+                   }
+                   $('#drift').text(driftText);
+                   api.setAttrs(attrmap);
+               };
+               setInterval(interval, 1000);
+           });
+       };
+
+
        var button_action = function() {
          if (changed) {
            api.reload(
@@ -80,6 +100,7 @@
                update_button();
                hide_error();
                update_url();
+               drift();
              }, 
              e  => {
                changed = false;
@@ -137,6 +158,18 @@
       display: none;
       font-size: 12pt;
       margin: 0;
+    }
+    #drift {
+      position: absolute;
+      right: 10px;
+      top: 100px;
+      width: 200px;
+      height: 200px;
+      background: #ddaaa2;
+      color: black;
+      white-space: pre;
+      font-family: monospace;
+      font-size: 12pt;
     }
     #run {
       font-size: 30pt;
@@ -212,6 +245,8 @@ init = A:bar
    </div>
    <button id="run" mode="play">Play</button>
    <div id="interface">
+   </div>
+   <div id="drift">
    </div>
   </body>
   <script defer>
