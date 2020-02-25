@@ -1,5 +1,5 @@
 {-# OPTIONS -Wall #-}
-{-# LANGUAGE DeriveFunctor, TupleSections, ViewPatterns, LambdaCase, ScopedTypeVariables, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE DeriveFunctor, TupleSections, ViewPatterns, LambdaCase, ScopedTypeVariables, DeriveGeneric, DeriveAnyClass, BangPatterns #-}
 
 import Control.Applicative
 import Control.Arrow (first, (&&&))
@@ -12,7 +12,7 @@ import qualified Control.Monad.Random as Rand
 import Control.Monad.Trans.Class (lift)
 import qualified Control.Monad.Trans.State as State
 import Data.Foldable (asum)
-import Data.List (nub, sortBy, maximumBy)
+import Data.List (nub, sortBy)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import qualified Data.Map as Map
 import Data.Maybe (catMaybes)
@@ -21,7 +21,6 @@ import Data.Ratio ((%))
 import qualified Data.Time.Clock as Clock
 import GHC.Generics (Generic)
 import System.Exit (ExitCode(ExitSuccess))
-import System.IO.Unsafe (unsafePerformIO)
 import qualified System.Posix.Signals as Sig
 import qualified Text.Parsec as P
 import Text.Read (readMaybe)
@@ -74,6 +73,8 @@ instance PhraseLike AnnoPhrase where
 unAnnotate :: AnnoPhrase a -> Phrase a
 unAnnotate (AnnoPhrase _ p) = p
 
+addAttrs :: Map.Map String Rational -> AnnoPhrase a -> AnnoPhrase a
+addAttrs attrs p = AnnoPhrase attrs mempty <> p
 
 data Terminal
     = TermVel Int
@@ -89,6 +90,7 @@ data Sym = Sym String String
          
 data Production = Production 
     { prodFilter :: TrackName -> Bool
+    , prodAttrs  :: Map.Map String Rational
     , prodLabel  :: String
     , prodSyms   :: [Sym]
     , prodWeight :: Rational
@@ -118,10 +120,12 @@ parseProd = do
     label <- parseLabel
     void $ tok (P.string "=")
     syms <- P.many1 parseSym
+    attrs <- P.option Map.empty $ tok (P.char '|') *> parseProdAttrs
     when (not . unique . map fst $ nub [ (name, lab) | Sym name lab <- syms ]) $
         fail $ "Invalid production: label is assigned multiple symbols"
     pure $ Production 
         { prodFilter = filt
+        , prodAttrs = attrs
         , prodLabel = label
         , prodSyms = syms
         , prodWeight = weight
@@ -163,6 +167,9 @@ parseProd = do
     parseLabel :: Parser String
     parseLabel = tok (P.many1 P.alphaNum)
 
+    parseProdAttrs :: Parser (Map.Map String Rational)
+    parseProdAttrs = Map.fromList <$> P.many ((,) <$> tok (P.many1 P.alphaNum) <* P.char '=' <*> tok parseNumber)
+
 comment :: Parser ()
 comment = void $ tok (P.string "//") *> P.many (P.satisfy (/= '\n'))
 
@@ -171,15 +178,17 @@ parseNum = product <$> P.sepBy literal (tok (P.string "*"))
     where
     literal = read <$> tok (P.many1 P.digit)
 
-parseAttrs :: Parser (Map.Map String Rational)
-parseAttrs = fmap Map.fromList . P.many $ tok (P.string "attr " ) *> ((,) <$> tok (P.many1 P.alphaNum) <*> tok number) <* P.newline
+parseNumber :: Parser Rational
+parseNumber = P.option id (negate <$ P.string "-") <*> readNum
     where
-    number = P.option id (negate <$ P.string "-") <*> readNum
     readNum = do
         digs <- P.many1 P.digit
         case readMaybe digs of
             Nothing -> fail $ "Bad number: " ++ show digs
             Just n -> pure (fromIntegral (n :: Integer))
+
+parseAttrs :: Parser (Map.Map String Rational)
+parseAttrs = fmap Map.fromList . P.many $ tok (P.string "attr " ) *> ((,) <$> tok (P.many1 P.alphaNum) <*> tok parseNumber) <* P.newline
 
 parseGrammar :: Parser Grammar
 parseGrammar = do
@@ -198,10 +207,11 @@ weighted = go 0 (error "weighted: empty list")
     where
     go _ a [] = pure a
     go t a ((x,w):xs) = do
-        r <- Rand.getRandomR (0, t+w)
+        let !t' = t+w
+        r <- Rand.getRandomR (0, t')
         if r <= w
-            then go t x xs
-            else go t a xs
+            then go t' x xs
+            else go t' a xs
 
 weightedShuffle :: [(a, Rational)] -> Cloud [a]
 weightedShuffle [] = pure []
@@ -213,7 +223,7 @@ renderProduction :: (String -> Logic.LogicT Cloud Production) -> String -> Int -
 renderProduction _ _ 0 = empty
 renderProduction chooseProd prodname depth = (`State.evalStateT` Map.empty) $ do
     prod <- lift $ chooseProd prodname
-    fmap mconcat (traverse renderSym (prodSyms prod))
+    addAttrs (prodAttrs prod) . mconcat <$> traverse renderSym (prodSyms prod)
     where
     baseVPhrase v
         | v == 0 = AnnoPhrase Map.empty $ Phrase 1 [(0,v)]
@@ -297,43 +307,44 @@ main = do
             grammar <- readIORef grammarRef
             let phraseScale = 60 / fromIntegral (gTempo grammar)
             instrs <- Rand.evalRandIO (sequenceA instruments)
-            phrases <- forM instrs $ \instr -> Rand.evalRandIO $ do
-                alts <- Logic.observeManyT 50 (renderGrammar startsym grammar instr)
+            phrases <- forM instrs $ \instr -> do
+                alts <- concat <$> Rand.evalRandIO (replicateM 50 (Logic.observeManyT 1 (renderGrammar startsym grammar instr)))
+
                 let compWeight (AnnoPhrase attrs _) = 1.01 ** fromRational (sum (Map.intersectionWith (*) (gAttrs grammar) attrs))
                 if null alts
                     then pure []
-                    else do
-                        r <- weighted $ map (id &&& compWeight) alts
-                        pure (pure (unAnnotate r))
-            -- is sortPhrase even necessary?
+                    else pure <$> Rand.evalRandIO (weighted (map (id &&& compWeight) alts))
 
-            let r = sortPhrase . scale phraseScale $ foldAssoc overlay mempty (join phrases)
+            -- is sortPhrase even necessary?
+            let r = sortPhrase . scale phraseScale $ foldAssoc overlay mempty (unAnnotate <$> join phrases)
             rnf r `seq` pure r
+
+    let play1 starttime nextPhrase = do
+            playPhrase conn starttime nextPhrase
+            let phraselen = realToFrac (phraseLength nextPhrase)
+            -- to prevent spamming of emptiness
+            nexttime <- if phraselen < 0.1 then (consoleLog =<< JS.toJSVal "empty") >> pure (addSeconds 0.1 starttime)
+                                           else pure $ addSeconds phraselen starttime
+            pure nexttime
+
 
     let play starttime = do
             waitUntil starttime
             nextPhrase <- readIORef nextPhraseRef
-            void . forkIO $ writeIORef nextPhraseRef =<< genphrase "init"
-            playPhrase conn starttime nextPhrase
-            let phraselen = realToFrac (phraseLength nextPhrase)
-            -- to prevent spamming of emptiness
-            let nexttime
-                  | phraselen < 0.1 = addSeconds 0.1 starttime
-                  | otherwise = addSeconds phraselen starttime
-            play nexttime
+            void . forkIO $ do
+                writeIORef nextPhraseRef =<< genphrase "init"
+            play =<< play1 starttime nextPhrase
 
     --void $ jquery "#drumsheet" JS.# "keyup" $ JS.fun $ \_ _ _ -> abortFail $ do 
     --    grammar <- join $ either (fail.show) pure <$> loadConfig
     --    writeIORef grammarRef grammar
 
     let playcb = do
-            -- Maybe the clock is implemented badly in ghcjs?
-            t <- Clock.getCurrentTime
-            rnf t `seq` pure ()
-
             tid <- forkIO $ do
-                writeIORef nextPhraseRef =<< genphrase "intro"
-                play =<< Clock.getCurrentTime
+                writeIORef nextPhraseRef =<< genphrase "init"
+                intro <- genphrase "intro"
+                t <- rnf intro `seq` Clock.getCurrentTime
+                play =<< play1 t intro
             writeIORef playThreadIdRef (Just tid)
     let stopcb = do
             tidMay <- readIORef playThreadIdRef
