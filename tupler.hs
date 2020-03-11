@@ -2,7 +2,7 @@
 {-# LANGUAGE MultiWayIf, DeriveFunctor, TupleSections #-}
 
 import qualified System.MIDI as MIDI
-import Control.Monad (filterM, guard, forM_, ap, join, (<=<), when)
+import Control.Monad (filterM, guard, forM_, ap, join, (<=<), when, forever)
 import Data.Ratio
 import Data.List (inits, tails, genericLength, genericReplicate, transpose)
 import qualified Control.Monad.Random as Rand
@@ -10,6 +10,8 @@ import qualified Data.Time.Clock.POSIX as Clock
 import Control.Concurrent (forkIO, threadDelay)
 import qualified Data.Map as Map
 import Data.Tuple (swap)
+import Data.IORef
+import qualified System.IO as IO
 
 newtype Cloud a = Cloud { getCloud :: [(a, Rational)] }
     deriving (Functor)
@@ -131,13 +133,15 @@ beatWeight (met, Beat s h) = sum
 divisors :: (Integral a) => a -> [a]
 divisors n = [ m | m <- [1..n], n `mod` m == 0 ]
 
-playBeat :: MIDI.Connection -> Beat [Int] -> Clock.POSIXTime -> IO Clock.POSIXTime
-playBeat dest beat t0 = do
+playBeat :: MIDI.Connection -> Scorer -> Beat [Int] -> Clock.POSIXTime -> IO Clock.POSIXTime
+playBeat dest scorer beat t0 = do
     let subdiv = realToFrac (bSubdiv beat)
     waitUntil t0
     _ <- forkIO $ do
         forM_ (zip [t0, t0 + subdiv..] (bHits beat)) $ \(t,notes) -> do
-            forM_ notes $ \n -> MIDI.send dest (MIDI.MidiMessage 1 (MIDI.NoteOn n 100))
+            forM_ notes $ \n -> do
+                when (n == 37) $ onMet scorer t  -- HACK KKKKKKK
+                MIDI.send dest (MIDI.MidiMessage 1 (MIDI.NoteOn n 100))
             waitUntil $ t + subdiv
             forM_ notes $ \n -> MIDI.send dest (MIDI.MidiMessage 1 (MIDI.NoteOn n 0))
 
@@ -156,17 +160,66 @@ openDest name = do
     print cand
     MIDI.openDestination cand
 
+data Scorer = Scorer
+    { onMet :: Clock.POSIXTime -> IO ()
+    , onHit :: Clock.POSIXTime -> IO ()
+    , getScore :: IO Double
+    }
+
+makeScorer :: IO Scorer
+makeScorer = do
+    stateRef <- newIORef (Nothing, Nothing, 0)
+
+    let accuracy t t' = 2 * exp ( -(30*realToFrac (t - t'))^(2::Int) ) - 1
+    let report diff 
+            | diff > 0.8 = putStr $ "\o33[1G\o33[K\o33[1;32m+" ++ show diff ++ "\o33[0m"
+            | diff > 0 = putStr $ "\o33[1G\o33[K\o33[1;33m+" ++ show diff ++ "\o33[0m"
+            | otherwise = putStr $ "\o33[1G\o33[K\o33[1;31m" ++ show diff ++ "\o33[0m"
+
+    let onMet' t = do
+            state <- readIORef stateRef
+            state' <- case state of
+                        (Nothing, Nothing, score) -> pure (Just t, Nothing, score)
+                        (Just _t', Nothing, score) -> report (-1 :: Double) >> pure (Just t, Nothing, score-1)
+                        (Nothing, Just h', score) -> do
+                            let dscore = accuracy t h'
+                            report dscore
+                            pure (Nothing, Nothing, score + dscore)
+                        (Just _t', Just _h', _score) -> error "Impossible!"
+            writeIORef stateRef state'
+    
+    let onHit' h = do
+            state <- readIORef stateRef
+            state' <- case state of
+                        (Nothing, Nothing, score) -> pure (Nothing, Just h, score)
+                        (Nothing, Just _h', score) -> putStrLn "MISS" >> pure (Nothing, Just h, score-1)
+                        (Just t, Nothing, score) -> do
+                            let dscore = accuracy t h
+                            report dscore
+                            pure (Nothing, Nothing, score + dscore)
+                        (Just _t', Just _h', _score) -> error "Impossible!"
+            writeIORef stateRef state'
+
+    _ <- forkIO $ do
+        IO.hSetBuffering IO.stdin IO.NoBuffering
+        forever $ do
+            _ <- getChar
+            onHit' =<< Clock.getPOSIXTime
+
+    pure $ Scorer onMet' onHit' ((\(_,_,s) -> s) <$> readIORef stateRef)
 
 main :: IO ()
 main = do
     dest <- openDest "IAC Bus 1"
     now <- Clock.getPOSIXTime
-    go dest Map.empty now (1, Beat 1 [True])
+    scorer <- makeScorer
+    go dest scorer Map.empty now (1, Beat 1 [True])
     where
-    go :: MIDI.Connection -> Map.Map (Rational, Beat Bool) Integer -> Clock.POSIXTime -> (Rational, Beat Bool) -> IO ()
-    go dest seen t0 (met, b) = do
+    go :: MIDI.Connection -> Scorer -> Map.Map (Rational, Beat Bool) Integer -> Clock.POSIXTime -> (Rational, Beat Bool) -> IO ()
+    go dest scorer seen t0 (met, b) = do
         putStrLn "\o33[2J\o33[1;1f"
-        putStrLn $ "\o33[1;33m" ++ show (beatWeight (met,b)) ++ " points\o33[0m\n"
+        score <- getScore scorer
+        putStrLn $ "\o33[1;33mScore: " ++ show score ++ "\o33[0m\n"
         let guide = superpose b (Beat met [()])
         putStrLn . showBeat . (met,) . fmap (\(h,m) -> [hitCh h, metCh m]) $ guide
         let options = getCloud (motions seen (met,b))
@@ -177,12 +230,12 @@ main = do
         t1 <- do
             -- let play = fmap (\(_,m) -> metNote m) guide
             let play' = fmap (\(h,m) -> metNote m ++ hitNote h) guide
-            t1 <- playBeat dest play' t0
-            t2 <- playBeat dest play' t1
-            t3 <- playBeat dest play' t2
-            t4 <- playBeat dest play' t3
+            t1 <- playBeat dest scorer play' t0
+            t2 <- playBeat dest scorer play' t1
+            t3 <- playBeat dest scorer play' t2
+            t4 <- playBeat dest scorer play' t3
             pure t4
-        go dest (Map.insertWith (+) (met',nextBeat) 1 seen) t1 (met',nextBeat)
+        go dest scorer (Map.insertWith (+) (met',nextBeat) 1 seen) t1 (met',nextBeat)
 
     metCh (Just ()) = '|'
     metCh Nothing = '.'
