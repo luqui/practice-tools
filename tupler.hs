@@ -42,8 +42,8 @@ showBeat beat = unlines (meter : transpose (bHits beat))
     where
     meter = show (numerator (bSubdiv beat)) ++ "/" ++ show (denominator (bSubdiv beat))
 
-motions :: Integer -> Set.Set (Beat Bool) -> Beat Bool -> [Beat Bool]
-motions maxcplx seen (Beat subdiv hits)  = filter valid $ map (\(Beat s h) -> Beat s (cycleGenerator h)) $ concat 
+motions :: Set.Set (Beat Bool) -> Beat Bool -> [Beat Bool]
+motions seen (Beat subdiv hits)  = filter valid $ map (\(Beat s h) -> Beat s (cycleGenerator h)) $ concat 
     [ dup, slice, addOrRemove, halfTime, doubleTime, prune, split, trim ]
     where
     dup = Beat subdiv <$> [hits, hits ++ hits, hits ++ hits ++ hits ]  -- breaking invariant briefly...
@@ -72,21 +72,12 @@ motions maxcplx seen (Beat subdiv hits)  = filter valid $ map (\(Beat s h) -> Be
         (pre, _:post) <- tail . init $ zip (inits hits) (tails hits)
         pure $ mkBeat subdiv (pre ++ post)
 
-    cplx b@(Beat s h) = sum [ denominator s
-                            , denominator s'
-                            , genericLength h
-                            , genericLength h'
-                            ]
-        where
-        Beat s' h' = superpose b (Beat 1 [()])
-
     valid b@(Beat s h) = and
         [ b /= Beat subdiv hits
         , s' <= 1
         , s < 1
         , or h
         , length h' <= 80
-        , cplx b < maxcplx
         , b `Set.notMember` seen
         ]
         where
@@ -125,15 +116,14 @@ main :: IO ()
 main = do
     dest <- openDest "IAC Bus 1"
     now <- Clock.getPOSIXTime
-    go dest 15 Set.empty now (Beat 1 [True])
+    go dest Set.empty now (Beat 1 [True])
     where
-    go :: MIDI.Connection -> Integer -> Set.Set (Beat Bool) -> Clock.POSIXTime -> Beat Bool -> IO ()
-    go dest maxcplx seen t0 b = do
+    go :: MIDI.Connection -> Set.Set (Beat Bool) -> Clock.POSIXTime -> Beat Bool -> IO ()
+    go dest seen t0 b = do
         putStrLn "\o33[2J\o33[1;1f"
-        putStrLn $ "Complexity " ++ show maxcplx
         let guide = superpose b (Beat 1 [()])
         putStrLn . showBeat . fmap (\(h,met) -> [hitCh h, metCh met]) $ guide
-        let options = motions maxcplx seen b
+        let options = motions seen b
         nextBeat <- if not (null options) then Rand.evalRandIO (Rand.uniform options) else pure b
         putStrLn . showBeat . fmap (\(h,met) -> [hitCh h, metCh met]) $ superpose nextBeat (Beat 1 [()])
 
@@ -145,7 +135,7 @@ main = do
             t3 <- playBeat dest play' t2
             t4 <- playBeat dest play' t3
             pure t4
-        go dest (maxcplx+1) (Set.insert nextBeat seen) t1 nextBeat
+        go dest (Set.insert nextBeat seen) t1 nextBeat
 
     metCh (Just ()) = '|'
     metCh Nothing = '.'
