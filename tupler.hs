@@ -1,17 +1,43 @@
 {-# OPTIONS -Wall #-}
-{-# LANGUAGE MultiWayIf, DeriveFunctor #-}
+{-# LANGUAGE MultiWayIf, DeriveFunctor, TupleSections #-}
 
 import qualified System.MIDI as MIDI
-import Control.Monad (filterM, guard, forM_)
+import Control.Monad (filterM, guard, forM_, ap, join)
 import Data.Ratio
 import Data.List (inits, tails, genericLength, genericReplicate, transpose)
 import qualified Control.Monad.Random as Rand
 import qualified Data.Time.Clock.POSIX as Clock
 import Control.Concurrent (forkIO, threadDelay)
 import qualified Data.Set as Set
+import Data.Tuple (swap)
+
+newtype Cloud a = Cloud { getCloud :: [(a, Rational)] }
+    deriving (Functor)
+
+instance Applicative Cloud where
+    pure x = Cloud [(x, 1)]
+    (<*>) = ap
+
+instance Monad Cloud where
+    Cloud ps >>= f = Cloud $ do
+        (x,p) <- ps
+        (y,q) <- getCloud (f x)
+        pure (y, p*q)
+
+pchoice :: [(Rational, a)] -> Cloud a
+pchoice = Cloud . map swap
+
+puniform :: [a] -> Cloud a
+puniform = Cloud . map (,1)
+
+pfilter :: (a -> Bool) -> Cloud a -> Cloud a
+pfilter p = Cloud . filter (p . fst) . getCloud
+    
+
 
 data Beat a = Beat { bSubdiv :: Rational, bHits :: [a] }
     deriving (Eq, Ord, Show, Functor)
+
 
 mkBeat :: (Eq a) => Rational -> [a] -> Beat a
 mkBeat s h = Beat s (cycleGenerator h)
@@ -42,33 +68,33 @@ showBeat beat = unlines (meter : transpose (bHits beat))
     where
     meter = show (numerator (bSubdiv beat)) ++ "/" ++ show (denominator (bSubdiv beat))
 
-motions :: Set.Set (Beat Bool) -> Beat Bool -> [Beat Bool]
-motions seen (Beat subdiv hits)  = filter valid $ map (\(Beat s h) -> Beat s (cycleGenerator h)) $ concat 
+motions :: Set.Set (Beat Bool) -> Beat Bool -> Cloud (Beat Bool)
+motions seen (Beat subdiv hits)  = pfilter valid . fmap (\(Beat s h) -> Beat s (cycleGenerator h)) . join . puniform $
     [ dup, slice, addOrRemove, halfTime, doubleTime, prune, split, trim ]
     where
-    dup = Beat subdiv <$> [hits, hits ++ hits, hits ++ hits ++ hits ]  -- breaking invariant briefly...
-    slice = do
+    dup = Beat subdiv <$> puniform [hits, hits ++ hits, hits ++ hits ++ hits ]  -- breaking invariant briefly...
+    slice = puniform $ do
         offs <- [-2..2]
         let len = offs + length hits
         guard $ len > 1
         pure $ mkBeat subdiv (take len (cycle hits))
-    addOrRemove = do
+    addOrRemove = puniform $ do
         (pre, x:post) <- zip (inits hits) (tails hits)
         let hits' = pre ++ not x : post
         guard $ any id hits'
         pure $ mkBeat subdiv hits'
     halfTime = pure $ mkBeat (subdiv/2) hits
     doubleTime = pure $ mkBeat (subdiv*2) hits
-    split = do
+    split = puniform $ do
         d <- [2,3,5]
         pure $ mkBeat (subdiv/fromIntegral d) (concat [ h : replicate (d-1) False | h <- hits ])
-    prune = do
+    prune = puniform $ do
         d <- [2,3]
         o <- [0..d-1]
         let guide = replicate o False ++ cycle (True : replicate (d-1) False)
         guard . and $ zipWith (\a b -> a || not b) guide hits
         pure $ mkBeat (fromIntegral d * subdiv) (map snd . filter fst $ zip guide hits)
-    trim = do
+    trim = puniform $ do
         (pre, _:post) <- tail . init $ zip (inits hits) (tails hits)
         pure $ mkBeat subdiv (pre ++ post)
 
@@ -123,8 +149,8 @@ main = do
         putStrLn "\o33[2J\o33[1;1f"
         let guide = superpose b (Beat 1 [()])
         putStrLn . showBeat . fmap (\(h,met) -> [hitCh h, metCh met]) $ guide
-        let options = motions seen b
-        nextBeat <- if not (null options) then Rand.evalRandIO (Rand.uniform options) else pure b
+        let options = getCloud (motions seen b)
+        nextBeat <- if not (null options) then Rand.evalRandIO (Rand.weighted options) else pure b
         putStrLn . showBeat . fmap (\(h,met) -> [hitCh h, metCh met]) $ superpose nextBeat (Beat 1 [()])
 
         t1 <- do
