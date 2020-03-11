@@ -2,13 +2,13 @@
 {-# LANGUAGE MultiWayIf, DeriveFunctor, TupleSections #-}
 
 import qualified System.MIDI as MIDI
-import Control.Monad (filterM, guard, forM_, ap, join)
+import Control.Monad (filterM, guard, forM_, ap, join, (<=<))
 import Data.Ratio
 import Data.List (inits, tails, genericLength, genericReplicate, transpose)
 import qualified Control.Monad.Random as Rand
 import qualified Data.Time.Clock.POSIX as Clock
 import Control.Concurrent (forkIO, threadDelay)
-import qualified Data.Set as Set
+import qualified Data.Map as Map
 import Data.Tuple (swap)
 
 newtype Cloud a = Cloud { getCloud :: [(a, Rational)] }
@@ -68,8 +68,8 @@ showBeat beat = unlines (meter : transpose (bHits beat))
     where
     meter = show (numerator (bSubdiv beat)) ++ "/" ++ show (denominator (bSubdiv beat))
 
-motions :: Set.Set (Beat Bool) -> Beat Bool -> Cloud (Beat Bool)
-motions seen (Beat subdiv hits)  = pfilter valid . fmap (\(Beat s h) -> Beat s (cycleGenerator h)) . join . puniform $
+motions :: Map.Map (Beat Bool) Integer -> Beat Bool -> Cloud (Beat Bool)
+motions seen (Beat subdiv hits)  = weightify <=< pfilter valid . fmap (\(Beat s h) -> Beat s (cycleGenerator h)) . join . puniform $
     [ dup, slice, addOrRemove, halfTime, doubleTime, prune, split, trim ]
     where
     dup = Beat subdiv <$> puniform [hits, hits ++ hits, hits ++ hits ++ hits ]  -- breaking invariant briefly...
@@ -98,16 +98,27 @@ motions seen (Beat subdiv hits)  = pfilter valid . fmap (\(Beat s h) -> Beat s (
         (pre, _:post) <- tail . init $ zip (inits hits) (tails hits)
         pure $ mkBeat subdiv (pre ++ post)
 
+    weightify b = Cloud [(b, 1 % (beatWeight b + 10 * Map.findWithDefault 0 b seen))]
+
     valid b@(Beat s h) = and
         [ b /= Beat subdiv hits
         , s' <= 1
         , s < 1
         , or h
         , length h' <= 80
-        , b `Set.notMember` seen
         ]
         where
         Beat s' h' = superpose b (Beat 1 [()])
+
+beatWeight :: Beat Bool -> Integer
+beatWeight b@(Beat s h) = sum
+    [ 4 * genericLength h
+    , genericLength h'
+    , denominator s ^ (2::Int)
+    , denominator s' ^ (2::Int)
+    ]
+    where
+    Beat s' h' = superpose b (Beat 1 [()])
 
 divisors :: (Integral a) => a -> [a]
 divisors n = [ m | m <- [1..n], n `mod` m == 0 ]
@@ -142,11 +153,12 @@ main :: IO ()
 main = do
     dest <- openDest "IAC Bus 1"
     now <- Clock.getPOSIXTime
-    go dest Set.empty now (Beat 1 [True])
+    go dest Map.empty now (Beat 1 [True])
     where
-    go :: MIDI.Connection -> Set.Set (Beat Bool) -> Clock.POSIXTime -> Beat Bool -> IO ()
+    go :: MIDI.Connection -> Map.Map (Beat Bool) Integer -> Clock.POSIXTime -> Beat Bool -> IO ()
     go dest seen t0 b = do
         putStrLn "\o33[2J\o33[1;1f"
+        putStrLn $ show (beatWeight b) ++ " points"
         let guide = superpose b (Beat 1 [()])
         putStrLn . showBeat . fmap (\(h,met) -> [hitCh h, metCh met]) $ guide
         let options = getCloud (motions seen b)
@@ -161,7 +173,7 @@ main = do
             t3 <- playBeat dest play' t2
             t4 <- playBeat dest play' t3
             pure t4
-        go dest (Set.insert nextBeat seen) t1 nextBeat
+        go dest (Map.insertWith (+) nextBeat 1 seen) t1 nextBeat
 
     metCh (Just ()) = '|'
     metCh Nothing = '.'
