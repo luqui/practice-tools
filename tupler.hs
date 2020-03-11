@@ -28,7 +28,7 @@ pchoice :: [(Rational, a)] -> Cloud a
 pchoice = Cloud . map swap
 
 puniform :: [a] -> Cloud a
-puniform = Cloud . map (,1)
+puniform xs = Cloud (map (, 1 % genericLength xs) xs)
 
 pfilter :: (a -> Bool) -> Cloud a -> Cloud a
 pfilter p = Cloud . filter (p . fst) . getCloud
@@ -70,7 +70,7 @@ showBeat beat = unlines (meter : transpose (bHits beat))
 
 motions :: Map.Map (Beat Bool) Integer -> Beat Bool -> Cloud (Beat Bool)
 motions seen (Beat subdiv hits)  = weightify <=< pfilter valid . fmap (\(Beat s h) -> Beat s (cycleGenerator h)) . join . puniform $
-    [ dup, slice, addOrRemove, halfTime, doubleTime, prune, split, trim ]
+    [ dup, slice, addOrRemove, halfTime, doubleTime, prune, rot, split, trim ]
     where
     dup = Beat subdiv <$> puniform [hits, hits ++ hits, hits ++ hits ++ hits ]  -- breaking invariant briefly...
     slice = puniform $ do
@@ -85,6 +85,9 @@ motions seen (Beat subdiv hits)  = weightify <=< pfilter valid . fmap (\(Beat s 
         pure $ mkBeat subdiv hits'
     halfTime = pure $ mkBeat (subdiv/2) hits
     doubleTime = pure $ mkBeat (subdiv*2) hits
+    rot = puniform $ do
+        r <- [1..length hits-1]
+        pure $ mkBeat subdiv (take (length hits) . drop r $ cycle hits)
     split = puniform $ do
         d <- [2,3,5]
         pure $ mkBeat (subdiv/fromIntegral d) (concat [ h : replicate (d-1) False | h <- hits ])
@@ -98,7 +101,7 @@ motions seen (Beat subdiv hits)  = weightify <=< pfilter valid . fmap (\(Beat s 
         (pre, _:post) <- tail . init $ zip (inits hits) (tails hits)
         pure $ mkBeat subdiv (pre ++ post)
 
-    weightify b = Cloud [(b, 1 % (beatWeight b + 10 * Map.findWithDefault 0 b seen))]
+    weightify b = Cloud [(b, 1 % (beatWeight b + 10 * Map.findWithDefault 0 b seen)^(2::Int))]
 
     valid b@(Beat s h) = and
         [ b /= Beat subdiv hits
@@ -166,10 +169,10 @@ main = do
         putStrLn . showBeat . fmap (\(h,met) -> [hitCh h, metCh met]) $ superpose nextBeat (Beat 1 [()])
 
         t1 <- do
-            let play = fmap (\(_,met) -> metNote met) guide
+            -- let play = fmap (\(_,met) -> metNote met) guide
             let play' = fmap (\(h,met) -> metNote met ++ hitNote h) guide
-            t1 <- playBeat dest play t0
-            t2 <- playBeat dest play t1
+            t1 <- playBeat dest play' t0
+            t2 <- playBeat dest play' t1
             t3 <- playBeat dest play' t2
             t4 <- playBeat dest play' t3
             pure t4
