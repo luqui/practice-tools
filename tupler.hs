@@ -2,7 +2,7 @@
 {-# LANGUAGE MultiWayIf, DeriveFunctor, TupleSections #-}
 
 import qualified System.MIDI as MIDI
-import Control.Monad (filterM, guard, forM_, ap, join, (<=<))
+import Control.Monad (filterM, guard, forM_, ap, join, (<=<), when)
 import Data.Ratio
 import Data.List (inits, tails, genericLength, genericReplicate, transpose)
 import qualified Control.Monad.Random as Rand
@@ -63,65 +63,70 @@ superpose (Beat subdiv hits) (Beat subdiv' hits') =
 cycleGenerator :: (Eq a) => [a] -> [a]
 cycleGenerator xs = head [ pre | pre <- tail (inits xs), length xs `mod` length pre == 0, xs == zipWith const (cycle pre) xs ]
 
-showBeat :: Beat [Char] -> String
-showBeat beat = unlines (meter : transpose (bHits beat))
+showBeat :: (Rational, Beat [Char]) -> String
+showBeat (met,beat) = unlines (tempo : meter : transpose (bHits beat))
     where
-    meter = show (numerator (bSubdiv beat)) ++ "/" ++ show (denominator (bSubdiv beat))
+    tempo = show (floor (60 / met) :: Integer) ++ " bpm"
+    meter = show (numerator subdiv) ++ "/" ++ show (denominator subdiv)
+    subdiv = bSubdiv beat / met
 
-motions :: Map.Map (Beat Bool) Integer -> Beat Bool -> Cloud (Beat Bool)
-motions seen (Beat subdiv hits)  = weightify <=< pfilter valid . fmap (\(Beat s h) -> Beat s (cycleGenerator h)) . join . puniform $
-    [ dup, slice, addOrRemove, halfTime, doubleTime, prune, rot, split, trim ]
+motions :: Map.Map (Rational, Beat Bool) Integer -> (Rational, Beat Bool) -> Cloud (Rational, Beat Bool)
+motions seen (met, Beat subdiv hits)  = weightify <=< pfilter valid . join . puniform $
+    [ dup, slice, addOrRemove, halfTime, doubleTime, remeter, prune, rot, split, trim ]
     where
-    dup = Beat subdiv <$> puniform [hits, hits ++ hits, hits ++ hits ++ hits ]  -- breaking invariant briefly...
-    slice = puniform $ do
+    dup = (met,) . Beat subdiv <$> puniform [hits, hits ++ hits, hits ++ hits ++ hits ]  -- breaking invariant briefly...
+    slice = fmap (met,) . puniform $ do
         offs <- [-2..2]
         let len = offs + length hits
         guard $ len > 1
         pure $ mkBeat subdiv (take len (cycle hits))
-    addOrRemove = puniform $ do
+    addOrRemove = fmap (met,) . puniform $ do
         (pre, x:post) <- zip (inits hits) (tails hits)
         let hits' = pre ++ not x : post
         guard $ any id hits'
         pure $ mkBeat subdiv hits'
-    halfTime = pure $ mkBeat (subdiv/2) hits
-    doubleTime = pure $ mkBeat (subdiv*2) hits
-    rot = puniform $ do
+    halfTime = fmap (met,) . pure $ mkBeat (subdiv/2) hits
+    doubleTime = fmap (met,) . pure $ mkBeat (subdiv*2) hits
+    remeter = puniform $ do
+        ratio <- [1/3, 1/2, 2/3, 3/4, 4/3, 3/2, 2, 3]
+        pure (met * ratio, mkBeat subdiv hits)
+    rot = fmap (met,) . puniform $ do
         r <- [1..length hits-1]
         pure $ mkBeat subdiv (take (length hits) . drop r $ cycle hits)
-    split = puniform $ do
+    split = fmap (met,) . puniform $ do
         d <- [2,3,5]
         pure $ mkBeat (subdiv/fromIntegral d) (concat [ h : replicate (d-1) False | h <- hits ])
-    prune = puniform $ do
+    prune = fmap (met,) . puniform $ do
         d <- [2,3]
         o <- [0..d-1]
         let guide = replicate o False ++ cycle (True : replicate (d-1) False)
         guard . and $ zipWith (\a b -> a || not b) guide hits
         pure $ mkBeat (fromIntegral d * subdiv) (map snd . filter fst $ zip guide hits)
-    trim = puniform $ do
+    trim = fmap (met,) . puniform $ do
         (pre, _:post) <- tail . init $ zip (inits hits) (tails hits)
         pure $ mkBeat subdiv (pre ++ post)
 
     weightify b = Cloud [(b, 1 % (beatWeight b + 10 * Map.findWithDefault 0 b seen)^(2::Int))]
 
-    valid b@(Beat s h) = and
-        [ b /= Beat subdiv hits
-        , s' <= 1
+    valid (m, Beat s h) = and
+        [ s' <= 1
         , s < 1
         , or h
         , length h' <= 80
+        , 1/2 <= m && m <= 2
         ]
         where
-        Beat s' h' = superpose b (Beat 1 [()])
+        Beat s' h' = superpose (Beat s h) (Beat m [()])
 
-beatWeight :: Beat Bool -> Integer
-beatWeight b@(Beat s h) = sum
+beatWeight :: (Rational, Beat Bool) -> Integer
+beatWeight (met, Beat s h) = sum
     [ 4 * genericLength h
     , genericLength h'
     , denominator s ^ (2::Int)
     , denominator s' ^ (2::Int)
     ]
     where
-    Beat s' h' = superpose b (Beat 1 [()])
+    Beat s' h' = superpose (Beat s h) (Beat met [()])
 
 divisors :: (Integral a) => a -> [a]
 divisors n = [ m | m <- [1..n], n `mod` m == 0 ]
@@ -156,27 +161,28 @@ main :: IO ()
 main = do
     dest <- openDest "IAC Bus 1"
     now <- Clock.getPOSIXTime
-    go dest Map.empty now (Beat 1 [True])
+    go dest Map.empty now (1, Beat 1 [True])
     where
-    go :: MIDI.Connection -> Map.Map (Beat Bool) Integer -> Clock.POSIXTime -> Beat Bool -> IO ()
-    go dest seen t0 b = do
+    go :: MIDI.Connection -> Map.Map (Rational, Beat Bool) Integer -> Clock.POSIXTime -> (Rational, Beat Bool) -> IO ()
+    go dest seen t0 (met, b) = do
         putStrLn "\o33[2J\o33[1;1f"
-        putStrLn $ show (beatWeight b) ++ " points"
-        let guide = superpose b (Beat 1 [()])
-        putStrLn . showBeat . fmap (\(h,met) -> [hitCh h, metCh met]) $ guide
-        let options = getCloud (motions seen b)
-        nextBeat <- if not (null options) then Rand.evalRandIO (Rand.weighted options) else pure b
-        putStrLn . showBeat . fmap (\(h,met) -> [hitCh h, metCh met]) $ superpose nextBeat (Beat 1 [()])
+        putStrLn $ "\o33[1;33m" ++ show (beatWeight (met,b)) ++ " points\o33[0m\n"
+        let guide = superpose b (Beat met [()])
+        putStrLn . showBeat . (met,) . fmap (\(h,m) -> [hitCh h, metCh m]) $ guide
+        let options = getCloud (motions seen (met,b))
+        (met', nextBeat) <- if not (null options) then Rand.evalRandIO (Rand.weighted options) else pure (met,b)
+        when (met' /= met) $ putStrLn "\o33[1;31mNEW TEMPO\o33[0m"
+        putStrLn . showBeat . (met',) . fmap (\(h,m) -> [hitCh h, metCh m]) $ superpose nextBeat (Beat met' [()])
 
         t1 <- do
-            -- let play = fmap (\(_,met) -> metNote met) guide
-            let play' = fmap (\(h,met) -> metNote met ++ hitNote h) guide
+            -- let play = fmap (\(_,m) -> metNote m) guide
+            let play' = fmap (\(h,m) -> metNote m ++ hitNote h) guide
             t1 <- playBeat dest play' t0
             t2 <- playBeat dest play' t1
             t3 <- playBeat dest play' t2
             t4 <- playBeat dest play' t3
             pure t4
-        go dest (Map.insertWith (+) nextBeat 1 seen) t1 nextBeat
+        go dest (Map.insertWith (+) (met',nextBeat) 1 seen) t1 (met',nextBeat)
 
     metCh (Just ()) = '|'
     metCh Nothing = '.'
