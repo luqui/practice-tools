@@ -1,3 +1,5 @@
 .cabal-sandbox
 cabal.sandbox.config
 obj/
+.DS_Store
+*.jsexe
