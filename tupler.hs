@@ -126,11 +126,12 @@ beatWeight :: (Rational, Beat Bool) -> Integer
 beatWeight (met, Beat s h) = sum
     [ 4 * genericLength h
     , genericLength h'
-    , denominator s ^ (2::Int)
-    , denominator s' ^ (2::Int)
+    , denominator (s/met) ^ (2::Int)
+    , denominator (s'/met) ^ (2::Int)
     ]
     where
     Beat s' h' = superpose (Beat s h) (Beat met [()])
+
 
 divisors :: (Integral a) => a -> [a]
 divisors n = [ m | m <- [1..n], n `mod` m == 0 ]
@@ -221,14 +222,18 @@ main = do
     dest <- openDest "IAC Bus 1"
     now <- Clock.getPOSIXTime
     scorer <- makeScorer dest
-    go dest scorer Map.empty now (1, Beat 1 [True])
+    tempo0 <- Rand.evalRandIO $ Rand.uniform [50/100, 51/100.. 200/100]
+    time0 <- playBeat dest scorer (Beat tempo0 (replicate 4 (Any False, [56]))) now
+    go dest scorer now Map.empty time0 (tempo0, Beat tempo0 [True])
     where
-    go :: MIDI.Connection -> Scorer -> Map.Map (Rational, Beat Bool) Integer -> Clock.POSIXTime -> (Rational, Beat Bool) -> IO ()
-    go dest scorer seen t0 (met, b) = do
+    go :: MIDI.Connection -> Scorer -> Clock.POSIXTime -> Map.Map (Rational, Beat Bool) Integer -> Clock.POSIXTime -> (Rational, Beat Bool) -> IO ()
+    go dest scorer gameStart seen t0 (met, b) = do
         putStrLn "\o33[2J\o33[1;1f"
-        score <- getScore scorer
-        putStrLn $ "\o33[1;33mScore: " ++ show score ++ "\o33[0m\n"
-        when (score < 0) (putStrLn "GAME OVER" >> exitSuccess)
+        health <- getScore scorer
+        score <- floor . subtract gameStart <$> Clock.getPOSIXTime :: IO Integer
+        putStrLn $ "\o33[1;32mScore: " ++ show score ++ "\o33[0m"
+        putStrLn $ "\o33[1;33mHealth: " ++ show health ++ "\o33[0m\n"
+        when (health < 0) (putStrLn "GAME OVER" >> exitSuccess)
         let guide = superpose b (Beat met [()])
         putStrLn . showBeat . (met,) . fmap (\(h,m) -> [hitCh h, metCh m]) $ guide
         let options = getCloud (motions seen (met,b))
@@ -244,7 +249,7 @@ main = do
             t3 <- playBeat dest scorer play' t2
             t4 <- playBeat dest scorer play' t3
             pure t4
-        go dest scorer (Map.insertWith (+) (met',nextBeat) 1 seen) t1 (met',nextBeat)
+        go dest scorer gameStart (Map.insertWith (+) (met',nextBeat) 1 seen) t1 (met',nextBeat)
 
     metCh (Just ()) = '|'
     metCh Nothing = '.'
