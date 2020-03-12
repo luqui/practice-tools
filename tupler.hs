@@ -174,11 +174,15 @@ makeScorer dest = do
     stateRef <- newIORef (Nothing, Nothing, 100)
     
     let accuracy :: Clock.POSIXTime -> Clock.POSIXTime -> Double
-        accuracy t t' = let r = 2 * exp ( -(15*realToFrac (t - t'))^(2::Int) ) - 1 in if r < 0 then 10*r else r
+        accuracy t t' 
+            = let r = 2 * exp ( -(15*realToFrac (t - t'))^(2::Int) ) - 1 
+              in if | r < 0 -> 10*r
+                    | r > 0.9 -> r - 2 * log (1 - r) / log 10
+                    | otherwise -> r
     let report :: Double -> IO ()
         report diff 
-            | diff > 0.8 = putStr $ "\o33[1G\o33[K\o33[1;32m+" ++ show diff ++ "\o33[0m"
-            | diff > 0 = putStr $ "\o33[1G\o33[K\o33[1;33m+" ++ show diff ++ "\o33[0m"
+            | diff > 1 = putStr $ "\o33[1G\o33[K\o33[1;32m+" ++ show diff ++ "\o33[0m"
+            | diff > -1 = putStr $ "\o33[1G\o33[K\o33[1;33m+" ++ show diff ++ "\o33[0m"
             | otherwise = putStr $ "\o33[1G\o33[K\o33[1;31m" ++ show diff ++ "\o33[0m"
 
     let onMet' t = do
