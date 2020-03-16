@@ -74,20 +74,22 @@ showBeat (met,beat) = unlines (tempo : meter : transpose (bHits beat))
     meter = show (numerator subdiv) ++ "/" ++ show (denominator subdiv)
     subdiv = bSubdiv beat / met
 
-motions :: Map.Map (Rational, Beat Bool) Integer -> (Rational, Beat Bool) -> Cloud (Rational, Beat Bool)
-motions seen (met, Beat subdiv hits)  = weightify <=< pfilter valid . join . puniform $
+approxTempo :: Rational -> Rational
+approxTempo met = fromInteger (floor ((60 / met) / 15))
+
+motions :: Rational -> Map.Map (Rational, Beat Bool) Integer -> (Rational, Beat Bool) -> Cloud (Rational, Beat Bool)
+motions targetDiff seen (met, Beat subdiv hits)  = weightify <=< pfilter valid . join . puniform $
     [ dup, slice, addOrRemove, halfTime, doubleTime, remeter, prune, rot, split, trim ]
     where
     dup = (met,) . Beat subdiv <$> puniform [hits, hits ++ hits, hits ++ hits ++ hits ]  -- breaking invariant briefly...
     slice = fmap (met,) . puniform $ do
-        offs <- [-2..2]
+        offs <- [-2,-1,1,2]
         let len = offs + length hits
         guard $ len > 1
         pure $ mkBeat subdiv (take len (cycle hits))
     addOrRemove = fmap (met,) . puniform $ do
         (pre, x:post) <- zip (inits hits) (tails hits)
         let hits' = pre ++ not x : post
-        guard $ any id hits'
         pure $ mkBeat subdiv hits'
     halfTime = fmap (met,) . pure $ mkBeat (subdiv/2) hits
     doubleTime = fmap (met,) . pure $ mkBeat (subdiv*2) hits
@@ -110,7 +112,7 @@ motions seen (met, Beat subdiv hits)  = weightify <=< pfilter valid . join . pun
         (pre, _:post) <- tail . init $ zip (inits hits) (tails hits)
         pure $ mkBeat subdiv (pre ++ post)
 
-    weightify b = Cloud [(b, 1 % (beatWeight b + 10 * Map.findWithDefault 0 b seen)^(2::Int))]
+    weightify (m,b) = Cloud [((m,b), 1 / (1 + (beatWeight (m,b) - targetDiff)^(2::Int))) ]
 
     valid (m, Beat s h) = and
         [ s' <= 1
@@ -118,16 +120,21 @@ motions seen (met, Beat subdiv hits)  = weightify <=< pfilter valid . join . pun
         , or h
         , length h' <= 80
         , 1/2 <= m && m <= 2
+        , genericLength h' * s' < 5  -- no more than 5 seconds per pattern
+        , (approxTempo m, Beat s h) `Map.notMember` seen
+        -- , let w = beatWeight (m, Beat s h) in targetDiff - 20 < w && w < targetDiff + 20
         ]
         where
         Beat s' h' = superpose (Beat s h) (Beat m [()])
 
-beatWeight :: (Rational, Beat Bool) -> Integer
+beatWeight :: (Rational, Beat Bool) -> Rational
 beatWeight (met, Beat s h) = sum
-    [ 4 * genericLength h
+    [ genericLength h ^ (2 :: Int)
     , genericLength h'
-    , denominator (s/met) ^ (2::Int)
-    , denominator (s'/met) ^ (2::Int)
+    , fromIntegral (denominator (s/met) ^ (2::Int))
+    , fromIntegral (denominator (s'/met) ^ (2::Int))
+    , 2 * ((60 / met - 100) / 30) ^ (2::Int)  -- 100 bpm is comfortable
+    , 2 * ((60 / s - 200) / 60) ^ (2::Int)  -- 200 notes per minute is comfortable
     ]
     where
     Beat s' h' = superpose (Beat s h) (Beat met [()])
@@ -226,21 +233,24 @@ main = do
     dest <- openDest "IAC Bus 1"
     now <- Clock.getPOSIXTime
     scorer <- makeScorer dest
-    tempo0 <- Rand.evalRandIO $ Rand.uniform [50/100, 51/100.. 200/100]
+    tempo0 <- Rand.evalRandIO $ Rand.uniform [60/fromIntegral t | t <- [60..120]]
     time0 <- playBeat dest scorer (Beat tempo0 (replicate 4 (Any False, [56]))) now
-    go dest scorer now Map.empty time0 (tempo0, Beat tempo0 [True])
+    go dest scorer now Map.empty 0 time0 (tempo0, Beat tempo0 [True])
     where
-    go :: MIDI.Connection -> Scorer -> Clock.POSIXTime -> Map.Map (Rational, Beat Bool) Integer -> Clock.POSIXTime -> (Rational, Beat Bool) -> IO ()
-    go dest scorer gameStart seen t0 (met, b) = do
+    go :: MIDI.Connection -> Scorer -> Clock.POSIXTime -> Map.Map (Rational, Beat Bool) Integer -> Integer -> Clock.POSIXTime -> (Rational, Beat Bool) -> IO ()
+    go dest scorer gameStart seen level t0 (met, b) = do
         putStrLn "\o33[2J\o33[1;1f"
         health <- getScore scorer
         score <- floor . subtract gameStart <$> Clock.getPOSIXTime :: IO Integer
+        let targetDiff = 5*level :: Integer
+        putStrLn $ "Level " ++ show level ++ " (diff " ++ show targetDiff ++ ")\n"
         putStrLn $ "\o33[1;32mScore: " ++ show score ++ "\o33[0m"
         putStrLn $ "\o33[1;33mHealth: " ++ show health ++ "\o33[0m\n"
         when (health < 0) (putStrLn "GAME OVER" >> exitSuccess)
         let guide = superpose b (Beat met [()])
+        putStrLn $ "Difficulty: " ++ show (realToFrac (beatWeight (met, b)) :: Double)
         putStrLn . showBeat . (met,) . fmap (\(h,m) -> [hitCh h, metCh m]) $ guide
-        let options = getCloud (motions seen (met,b))
+        let options = getCloud (motions (fromIntegral targetDiff) seen (met,b))
         (met', nextBeat) <- if not (null options) then Rand.evalRandIO (Rand.weighted options) else pure (met,b)
         when (met' /= met) $ putStrLn "\o33[1;31mNEW TEMPO\o33[0m"
         putStrLn . showBeat . (met',) . fmap (\(h,m) -> [hitCh h, metCh m]) $ superpose nextBeat (Beat met' [()])
@@ -253,7 +263,7 @@ main = do
             t3 <- playBeat dest scorer play' t2
             t4 <- playBeat dest scorer play' t3
             pure t4
-        go dest scorer gameStart (Map.insertWith (+) (met',nextBeat) 1 seen) t1 (met',nextBeat)
+        go dest scorer gameStart (Map.insertWith (+) (approxTempo met',nextBeat) 1 seen) (level+1) t1 (met',nextBeat)
 
     metCh (Just ()) = '|'
     metCh Nothing = '.'
