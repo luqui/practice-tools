@@ -1,5 +1,5 @@
 {-# OPTIONS -Wall #-}
-{-# LANGUAGE MultiWayIf, DeriveFunctor, TupleSections #-}
+{-# LANGUAGE MultiWayIf, DeriveFunctor, TupleSections, LambdaCase #-}
 
 import qualified System.MIDI as MIDI
 import Control.Monad (filterM, guard, forM_, ap, join, (<=<), when, forever)
@@ -14,6 +14,7 @@ import Data.IORef
 import Data.Monoid (Any(..))
 import qualified System.IO as IO
 import System.Exit (exitSuccess)
+import System.Environment (getArgs)
 
 newtype Cloud a = Cloud { getCloud :: [(a, Rational)] }
     deriving (Functor)
@@ -174,96 +175,115 @@ data Scorer = Scorer
     { onMet :: Clock.POSIXTime -> IO ()
     , onHit :: Clock.POSIXTime -> IO ()
     , getScore :: IO Double
+    , getLives :: IO Int
+    , reset :: IO ()
+    , perfect :: IO Bool
     }
 
 makeScorer :: MIDI.Connection -> IO Scorer
 makeScorer dest = do
-    stateRef <- newIORef (Nothing, Nothing, 100)
-    
-    let accuracy :: Clock.POSIXTime -> Clock.POSIXTime -> Double
-        accuracy t t' 
-            = let r = 2 * exp ( -(15*realToFrac (t - t'))^(2::Int) ) - 1 
-              in if | r < 0 -> 10*r
-                    | r > 0.9 -> r - 2 * log (1 - r) / log 10
-                    | otherwise -> r
-    let report :: Double -> IO ()
-        report diff 
-            | diff > 1 = putStr $ "\o33[1G\o33[K\o33[1;32m+" ++ show diff ++ "\o33[0m"
-            | diff > -1 = putStr $ "\o33[1G\o33[K\o33[1;33m+" ++ show diff ++ "\o33[0m"
-            | otherwise = putStr $ "\o33[1G\o33[K\o33[1;31m" ++ show diff ++ "\o33[0m"
+    stateRef <- newIORef (Nothing, Nothing)
+    scoreRef <- newIORef (0 :: Int, 100 :: Double, 3 :: Int, False, True)
 
-    let onMet' t = do
-            state <- readIORef stateRef
-            state' <- case state of
-                        (Nothing, Just h, score)
-                            | accuracy t h > 0 -> report (accuracy t h) >> pure (Nothing, Nothing, score + accuracy t h)
-                            | otherwise -> report (accuracy t h) >> pure (Just t, Nothing, score + accuracy t h)
-                        (Nothing, Nothing, score)
-                            -> pure (Just t, Nothing, score)
-                        (Just _t', Nothing, score)
-                            -> report (-10) >> pure (Just t, Nothing, score - 10)
-                        (Just _t', Just _h', _score) -> error "Impossible!"
-            writeIORef stateRef state'
+    changeScore <- pure $ \r -> do
+        (combo, score, lives, lifeGuard, perf) <- readIORef scoreRef
+        putStr $ "\o33[1G\o33[K"
+        if | r > 0.9 -> do
+            putStr $ "\o33[1;32m+" ++ show (fromIntegral (combo+1) * r) ++ " (x " ++ show (combo+1) ++ ")\o33[0m"
+            writeIORef scoreRef (combo + 1, score + fromIntegral combo * r, lives, lifeGuard, perf)
+           | r >= 0 -> do
+            putStr $ "\o33[1;33m+" ++ show (fromIntegral combo * r) ++ " (x " ++ show combo ++ ")\o33[0m"
+            writeIORef scoreRef (combo, score + fromIntegral combo * r, lives, lifeGuard, perf)
+           | otherwise -> do
+            putStr $ "\o33[1;31m" ++ show r ++ "\o33[0m"
+            writeIORef scoreRef (0, score + r, if lifeGuard then lives else lives {- - 1 -}, True, False)
+        writeIORef stateRef (Nothing, Nothing)
+
+    measure <- pure $ \t t' -> do
+        let r = 2 * exp ( -(15*realToFrac (t - t'))^(2::Int) ) - 1
+        if | r < 0 -> changeScore (10 * r)
+           | otherwise -> changeScore r
+
+        
+    onMet' <- pure $ \t -> do
+        state <- readIORef stateRef
+        case state of
+            (Nothing, Just h) -> measure t h
+            (Nothing, Nothing) -> writeIORef stateRef (Just t, Nothing)
+            (Just _t', Nothing) -> changeScore (-10) >> writeIORef stateRef (Just t, Nothing)
+            (Just _t', Just _h') -> error "Impossible!"
     
-    let onHit' h = do
-            state <- readIORef stateRef
-            state' <- case state of
-                        (Just t, Nothing, score)
-                            | accuracy t h > 0 -> report (accuracy t h) >> pure (Nothing, Nothing, score + accuracy t h)
-                            | otherwise -> report (accuracy t h) >> pure (Nothing, Just h, score + accuracy t h)
-                        (Nothing, Nothing, score)
-                            -> pure (Nothing, Just h, score)
-                        (Nothing, Just _h', score)
-                            -> report (-10) >> pure (Nothing, Just h, score - 10)
-                        (Just _t', Just _h', _score) -> error "Impossible!"
-            writeIORef stateRef state'
+    onHit' <- pure $ \h -> do
+        state <- readIORef stateRef
+        case state of
+            (Just t, Nothing) -> measure t h
+            (Nothing, Nothing) -> writeIORef stateRef (Nothing, Just h)
+            (Nothing, Just _h') -> changeScore (-10) >> writeIORef stateRef (Nothing, Just h)
+            (Just _t', Just _h') -> error "Impossible!"
 
     _ <- forkIO $ do
         IO.hSetBuffering IO.stdin IO.NoBuffering
+        IO.hSetEcho IO.stdin False
         forever $ do
             _ <- getChar
             MIDI.send dest (MIDI.MidiMessage 1 (MIDI.NoteOn 37 100))
             MIDI.send dest (MIDI.MidiMessage 1 (MIDI.NoteOn 37 0))
             onHit' =<< Clock.getPOSIXTime
 
-    pure $ Scorer onMet' onHit' ((\(_,_,s) -> s) <$> readIORef stateRef)
+    pure $ Scorer onMet' onHit'
+                ((\(_,score,_,_,_) -> score) <$> readIORef scoreRef)
+                ((\(_,_,lives,_,_) -> lives) <$> readIORef scoreRef) 
+                (modifyIORef scoreRef (\(a,b,c,_,_) -> (a,b,c,False,True)))
+                ((\(_,_,_,_,perf) -> perf)<$> readIORef scoreRef)
 
 main :: IO ()
 main = do
     dest <- openDest "IAC Bus 1"
     now <- Clock.getPOSIXTime
+    level0 <- getArgs >>= pure . \case
+                [] -> 0
+                [n] -> read n
+                _ -> error "Unknown argument"
     scorer <- makeScorer dest
-    tempo0 <- Rand.evalRandIO $ Rand.uniform [60/fromIntegral t | t <- [60..120]]
+    tempo0 <- Rand.evalRandIO $ Rand.uniform [60/t | t <- [60..120]]
     time0 <- playBeat dest scorer (Beat tempo0 (replicate 4 (Any False, [56]))) now
-    go dest scorer now Map.empty 0 time0 (tempo0, Beat tempo0 [True])
+    go dest scorer Map.empty level0 time0 (tempo0, Beat tempo0 [True]) False
     where
-    go :: MIDI.Connection -> Scorer -> Clock.POSIXTime -> Map.Map (Rational, Beat Bool) Integer -> Integer -> Clock.POSIXTime -> (Rational, Beat Bool) -> IO ()
-    go dest scorer gameStart seen level t0 (met, b) = do
+    go :: MIDI.Connection -> Scorer -> Map.Map (Rational, Beat Bool) Integer -> Integer -> Clock.POSIXTime -> (Rational, Beat Bool) -> Bool -> IO ()
+    go dest scorer seen level t0 (met, b) playGuide = do
+        reset scorer
         putStrLn "\o33[2J\o33[1;1f"
-        health <- getScore scorer
-        score <- floor . subtract gameStart <$> Clock.getPOSIXTime :: IO Integer
-        let targetDiff = 5*level :: Integer
-        putStrLn $ "Level " ++ show level ++ " (diff " ++ show targetDiff ++ ")\n"
+        score <- getScore scorer
+        lives <- getLives scorer
+        let targetDiff = 5 * fromIntegral level :: Double
+        putStrLn $ "Level " ++ show level ++ " (diff " ++ show (floor targetDiff :: Integer) ++ ")\n"
+        putStrLn $ "\o33[1;33mLives: " ++ show lives ++ "\o33[0m\n"
         putStrLn $ "\o33[1;32mScore: " ++ show score ++ "\o33[0m"
-        putStrLn $ "\o33[1;33mHealth: " ++ show health ++ "\o33[0m\n"
-        when (health < 0) (putStrLn "GAME OVER" >> exitSuccess)
+        when (lives < 0) (putStrLn "GAME OVER" >> exitSuccess)
         let guide = superpose b (Beat met [()])
         putStrLn $ "Difficulty: " ++ show (realToFrac (beatWeight (met, b)) :: Double)
         putStrLn . showBeat . (met,) . fmap (\(h,m) -> [hitCh h, metCh m]) $ guide
-        let options = getCloud (motions (fromIntegral targetDiff) seen (met,b))
+        let options = getCloud (motions (realToFrac targetDiff) seen (met,b))
         (met', nextBeat) <- if not (null options) then Rand.evalRandIO (Rand.weighted options) else pure (met,b)
         when (met' /= met) $ putStrLn "\o33[1;31mNEW TEMPO\o33[0m"
         putStrLn . showBeat . (met',) . fmap (\(h,m) -> [hitCh h, metCh m]) $ superpose nextBeat (Beat met' [()])
 
         t1 <- do
             let play = fmap (\(h,m) -> metNote m <> silentHitNote h) guide
-            let play' = fmap (\(h,m) -> metNote m <> hitNote h) guide
-            t1 <- playBeat dest scorer play t0
-            t2 <- playBeat dest scorer play t1
-            t3 <- playBeat dest scorer play' t2
-            t4 <- playBeat dest scorer play' t3
+            let play' | playGuide = fmap (\(h,m) -> metNote m <> hitNote h) guide
+                      | otherwise = play
+            t1 <- playBeat dest scorer play' t0
+            t2 <- playBeat dest scorer play' t1
+            t3 <- playBeat dest scorer play t2
+            t4 <- playBeat dest scorer play t3
             pure t4
-        go dest scorer gameStart (Map.insertWith (+) (approxTempo met',nextBeat) 1 seen) (level+1) t1 (met',nextBeat)
+
+        perf <- perfect scorer
+        if perf then
+            go dest scorer (Map.insertWith (+) (approxTempo met',nextBeat) 1 seen) (level+1) t1 (met',nextBeat) False
+        else
+            go dest scorer seen level t1 (met,b) True
+
 
     metCh (Just ()) = '|'
     metCh Nothing = '.'
