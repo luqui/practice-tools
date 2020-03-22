@@ -44,7 +44,6 @@ pfilter p = Cloud . filter (p . fst) . getCloud
 data Beat a = Beat { bSubdiv :: Rational, bHits :: [a] }
     deriving (Eq, Ord, Show, Functor)
 
-
 mkBeat :: (Eq a) => Rational -> [a] -> Beat a
 mkBeat s h = Beat s (cycleGenerator h)
 
@@ -76,61 +75,79 @@ showBeat (met,beat) = unlines (tempo : meter : transpose (bHits beat))
     meter = show (numerator subdiv) ++ "/" ++ show (denominator subdiv)
     subdiv = bSubdiv beat / met
 
+data Exercise = Exercise
+    { exMetronome :: Rational
+    , exBeat :: Beat Bool 
+    }
+    deriving (Eq,Ord)
+
+showExercise :: Exercise -> String
+showExercise (Exercise met beat) = showBeat . (met,) . fmap (\(h,m) -> [hitCh h, metCh m]) $ guide
+    where
+    guide = superpose beat (Beat met [()])
+
+    metCh (Just ()) = '|'
+    metCh Nothing = '.'
+
+    hitCh (Just True) = '*'
+    hitCh (Just False) = '.'
+    hitCh Nothing = ' '
+
 approxTempo :: Rational -> Rational
 approxTempo met = fromInteger (floor ((60 / met) / 15))
 
-motions :: Rational -> Map.Map (Rational, Beat Bool) Integer -> (Rational, Beat Bool) -> Cloud (Rational, Beat Bool)
-motions targetDiff seen (met, Beat subdiv hits)  = weightify <=< pfilter valid . join . puniform $
+motions :: Rational -> Map.Map Exercise Integer -> Exercise -> Cloud Exercise
+motions targetDiff seen (Exercise met (Beat subdiv hits)) = weightify <=< pfilter valid . join . puniform $
     [ dup, slice, addOrRemove, halfTime, doubleTime, remeter, prune, rot, split, trim ]
     where
-    dup = (met,) . Beat subdiv <$> puniform [hits, hits ++ hits, hits ++ hits ++ hits ]  -- breaking invariant briefly...
-    slice = fmap (met,) . puniform $ do
+    dup = Exercise met . Beat subdiv <$> puniform [hits, hits ++ hits, hits ++ hits ++ hits ]  -- breaking invariant briefly...
+    slice = fmap (Exercise met) . puniform $ do
         offs <- [-2,-1,1,2]
         let len = offs + length hits
         guard $ len > 1
         pure $ mkBeat subdiv (take len (cycle hits))
-    addOrRemove = fmap (met,) . puniform $ do
+    addOrRemove = fmap (Exercise met) . puniform $ do
         (pre, x:post) <- zip (inits hits) (tails hits)
         let hits' = pre ++ not x : post
         pure $ mkBeat subdiv hits'
-    halfTime = fmap (met,) . pure $ mkBeat (subdiv/2) hits
-    doubleTime = fmap (met,) . pure $ mkBeat (subdiv*2) hits
+    halfTime = fmap (Exercise met) . pure $ mkBeat (subdiv/2) hits
+    doubleTime = fmap (Exercise met) . pure $ mkBeat (subdiv*2) hits
     remeter = puniform $ do
         ratio <- [1/3, 1/2, 2/3, 3/4, 4/3, 3/2, 2, 3]
-        pure (met * ratio, mkBeat subdiv hits)
-    rot = fmap (met,) . puniform $ do
+        pure $ Exercise (met * ratio) (mkBeat subdiv hits)
+    rot = fmap (Exercise met) . puniform $ do
         r <- [1..length hits-1]
         pure $ mkBeat subdiv (take (length hits) . drop r $ cycle hits)
-    split = fmap (met,) . puniform $ do
+    split = fmap (Exercise met) . puniform $ do
         d <- [2,3,5]
         pure $ mkBeat (subdiv/fromIntegral d) (concat [ h : replicate (d-1) False | h <- hits ])
-    prune = fmap (met,) . puniform $ do
+    prune = fmap (Exercise met) . puniform $ do
         d <- [2,3]
         o <- [0..d-1]
         let guide = replicate o False ++ cycle (True : replicate (d-1) False)
         guard . and $ zipWith (\a b -> a || not b) guide hits
         pure $ mkBeat (fromIntegral d * subdiv) (map snd . filter fst $ zip guide hits)
-    trim = fmap (met,) . puniform $ do
+    trim = fmap (Exercise met) . puniform $ do
         (pre, _:post) <- tail . init $ zip (inits hits) (tails hits)
         pure $ mkBeat subdiv (pre ++ post)
 
-    weightify (m,b) = Cloud [((m,b), 1 / (1 + (beatWeight (m,b) - targetDiff)^(2::Int))) ]
+    weightify ex = Cloud [(ex, 1 / (1 + (beatWeight ex - targetDiff)^(2::Int))) ]
 
-    valid (m, Beat s h) = and
+    valid (Exercise m (Beat s h)) = and
         [ s' <= 1
         , s < 1
         , or h
         , length h' <= 80
         , 1/2 <= m && m <= 2
         , genericLength h' * s' < 5  -- no more than 5 seconds per pattern
-        , (approxTempo m, Beat s h) `Map.notMember` seen
+        , Exercise (approxTempo m) (Beat s h) `Map.notMember` seen
         -- , let w = beatWeight (m, Beat s h) in targetDiff - 20 < w && w < targetDiff + 20
         ]
         where
         Beat s' h' = superpose (Beat s h) (Beat m [()])
 
-beatWeight :: (Rational, Beat Bool) -> Rational
-beatWeight (met, Beat s h) = sum
+beatWeight :: Exercise -> Rational
+beatWeight (Exercise met (Beat s h)) = sum
     [ genericLength h ^ (2 :: Int)
     , genericLength h'
     , fromIntegral (denominator (s/met) ^ (2::Int))
@@ -160,6 +177,23 @@ playBeat dest scorer beat t0 = do
     let finalTime = t0 + subdiv * genericLength (bHits beat)
     waitUntil finalTime
     pure finalTime
+
+playExercise :: MIDI.Connection -> Scorer -> Bool -> Exercise -> Clock.POSIXTime -> IO Clock.POSIXTime
+playExercise dest scorer playGuide (Exercise met b) t0 = playBeat dest scorer play t0
+  where
+    guide = superpose b (Beat met [()])
+    play | playGuide = fmap (\(h,m) -> metNote m <> hitNote h) guide
+         | otherwise = fmap (\(h,m) -> metNote m <> silentHitNote h) guide
+
+    metNote (Just ()) = (Any False, [56])
+    metNote Nothing = mempty
+
+    hitNote (Just True) = (Any True, [42])
+    hitNote _ = mempty
+
+    silentHitNote (Just True) = (Any True, [])
+    silentHitNote _ = mempty
+    
 
 waitUntil :: Clock.POSIXTime -> IO ()
 waitUntil t = do
@@ -244,10 +278,10 @@ main = do
     scorer <- makeScorer dest
     tempo0 <- Rand.evalRandIO $ Rand.uniform [60/t | t <- [60..120]]
     time0 <- playBeat dest scorer (Beat tempo0 (replicate 4 (Any False, [56]))) now
-    go dest scorer Map.empty level0 time0 (tempo0, Beat tempo0 [True]) False
+    go dest scorer Map.empty level0 time0 (Exercise tempo0 (Beat tempo0 [True])) False
     where
-    go :: MIDI.Connection -> Scorer -> Map.Map (Rational, Beat Bool) Integer -> Integer -> Clock.POSIXTime -> (Rational, Beat Bool) -> Bool -> IO ()
-    go dest scorer seen level t0 (met, b) playGuide = do
+    go :: MIDI.Connection -> Scorer -> Map.Map Exercise Integer -> Integer -> Clock.POSIXTime -> Exercise -> Bool -> IO ()
+    go dest scorer seen level t0 (Exercise met b) playGuide = do
         reset scorer
         putStrLn "\o33[2J\o33[1;1f"
         score <- getScore scorer
@@ -257,43 +291,22 @@ main = do
         putStrLn $ "\o33[1;33mLives: " ++ show lives ++ "\o33[0m\n"
         putStrLn $ "\o33[1;32mScore: " ++ show score ++ "\o33[0m"
         when (lives < 0) (putStrLn "GAME OVER" >> exitSuccess)
-        let guide = superpose b (Beat met [()])
-        putStrLn $ "Difficulty: " ++ show (realToFrac (beatWeight (met, b)) :: Double)
-        putStrLn . showBeat . (met,) . fmap (\(h,m) -> [hitCh h, metCh m]) $ guide
-        let options = getCloud (motions (realToFrac targetDiff) seen (met,b))
-        (met', nextBeat) <- if not (null options) then Rand.evalRandIO (Rand.weighted options) else pure (met,b)
+        putStrLn $ "Difficulty: " ++ show (realToFrac (beatWeight (Exercise met b)) :: Double)
+        putStrLn $ showExercise (Exercise met b)
+        let options = getCloud (motions (realToFrac targetDiff) seen (Exercise met b))
+        Exercise met' nextBeat <- if not (null options) then Rand.evalRandIO (Rand.weighted options) else pure (Exercise met b)
         when (met' /= met) $ putStrLn "\o33[1;31mNEW TEMPO\o33[0m"
-        putStrLn . showBeat . (met',) . fmap (\(h,m) -> [hitCh h, metCh m]) $ superpose nextBeat (Beat met' [()])
+        putStrLn $ showExercise (Exercise met' nextBeat)
 
         t1 <- do
-            let play = fmap (\(h,m) -> metNote m <> silentHitNote h) guide
-            let play' | playGuide = fmap (\(h,m) -> metNote m <> hitNote h) guide
-                      | otherwise = play
-            t1 <- playBeat dest scorer play' t0
-            t2 <- playBeat dest scorer play' t1
-            t3 <- playBeat dest scorer play t2
-            t4 <- playBeat dest scorer play t3
-            pure t4
+            t1 <- playExercise dest scorer playGuide (Exercise met b) t0
+            t2 <- playExercise dest scorer playGuide (Exercise met b) t1
+            t3 <- playExercise dest scorer False (Exercise met b) t2
+            playExercise dest scorer False (Exercise met b) t3
 
         perf <- perfect scorer
         if perf then
-            go dest scorer (Map.insertWith (+) (approxTempo met',nextBeat) 1 seen) (level+1) t1 (met',nextBeat) False
+            go dest scorer (Map.insertWith (+) (Exercise (approxTempo met') nextBeat) 1 seen) (level+1) t1 (Exercise met' nextBeat) False
         else
-            go dest scorer seen level t1 (met,b) True
+            go dest scorer seen level t1 (Exercise met b) True
 
-
-    metCh (Just ()) = '|'
-    metCh Nothing = '.'
-
-    metNote (Just ()) = (Any False, [56])
-    metNote Nothing = mempty
-
-    hitCh (Just True) = '*'
-    hitCh (Just False) = '.'
-    hitCh Nothing = ' '
-
-    hitNote (Just True) = (Any True, [42])
-    hitNote _ = mempty
-
-    silentHitNote (Just True) = (Any True, [])
-    silentHitNote _ = mempty
