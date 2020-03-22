@@ -13,9 +13,10 @@ import Data.Tuple (swap)
 import Data.IORef
 import Data.Monoid (Any(..))
 import qualified System.IO as IO
-import System.Exit (exitSuccess)
 import System.Environment (getArgs)
 import Data.Foldable (traverse_)
+import Control.Monad.Trans.State
+import Control.Monad.Trans.Class
 
 newtype Cloud a = Cloud { getCloud :: [(a, Rational)] }
     deriving (Functor)
@@ -218,7 +219,6 @@ data Scorer = Scorer
     { scoOnMet :: Clock.POSIXTime -> IO ()
     , scoOnHit :: Clock.POSIXTime -> IO ()
     , scoGetScore :: IO Double
-    , scoGetLives :: IO Int
     , scoReset :: IO ()
     , scoPerfect :: IO Bool
     }
@@ -227,20 +227,20 @@ makeScorer :: MIDI.Connection -> IO Scorer
 makeScorer dest = do
     time0 <- Clock.getPOSIXTime
     stateRef <- newIORef (time0, [])
-    scoreRef <- newIORef (0 :: Int, 100 :: Double, 3 :: Int, False, True)
+    scoreRef <- newIORef (0 :: Int, 100 :: Double, True)
 
     changeScore <- pure $ \r -> do
-        (combo, score, lives, lifeGuard, perf) <- readIORef scoreRef
+        (combo, score, perf) <- readIORef scoreRef
         putStr $ "\o33[1G\o33[K"
         if | r > 0.9 -> do
             putStr $ "\o33[1;32m+" ++ show (fromIntegral (combo+1) * r) ++ " (x " ++ show (combo+1) ++ ")\o33[0m"
-            writeIORef scoreRef (combo + 1, score + fromIntegral combo * r, lives, lifeGuard, perf)
+            writeIORef scoreRef (combo + 1, score + fromIntegral combo * r, perf)
            | r >= 0 -> do
             putStr $ "\o33[1;33m+" ++ show (fromIntegral combo * r) ++ " (x " ++ show combo ++ ")\o33[0m"
-            writeIORef scoreRef (combo, score + fromIntegral combo * r, lives, lifeGuard, perf)
+            writeIORef scoreRef (combo, score + fromIntegral combo * r, perf)
            | otherwise -> do
             putStr $ "\o33[1;31m" ++ show r ++ "\o33[0m"
-            writeIORef scoreRef (0, score + r, if lifeGuard then lives else lives {- - 1 -}, True, False)
+            writeIORef scoreRef (0, score + r, False)
 
     measure <- pure $ \t t' -> 2 * exp ( -(15*realToFrac (t - t'))^(2::Int) ) - 1
 
@@ -261,13 +261,35 @@ makeScorer dest = do
            | otherwise -> writeIORef stateRef (met, h:hits)
 
     pure $ Scorer onMet' onHit'
-                ((\(_,score,_,_,_) -> score) <$> readIORef scoreRef)
-                ((\(_,_,lives,_,_) -> lives) <$> readIORef scoreRef) 
-                (modifyIORef scoreRef (\(a,b,c,_,_) -> (a,b,c,False,True)))
-                ((\(_,_,_,_,perf) -> perf)<$> readIORef scoreRef)
+                ((\(_,score,_) -> score) <$> readIORef scoreRef)
+                (modifyIORef scoreRef (\(a,b,_) -> (a,b,True)))
+                ((\(_,_,perf) -> perf)<$> readIORef scoreRef)
 
 approxExercise :: Exercise -> Exercise
 approxExercise (Exercise met b) = Exercise (fromInteger (floor ((60 / met) / 15))) b
+
+normalMode :: MIDI.Connection -> Scorer -> Integer -> Exercise -> Exercise -> Clock.POSIXTime -> IO (Bool, Clock.POSIXTime)
+normalMode dest scorer level ex nextEx t0 = do
+    scoReset scorer
+    putStrLn "\o33[2J\o33[1;1f"
+
+    score <- scoGetScore scorer
+    putStrLn $ "Level " ++ show level
+    putStrLn $ "\o33[1;32mScore: " ++ show score ++ "\o33[0m"
+    putStrLn $ "Difficulty: " ++ show (realToFrac (exerciseWeight ex) :: Double)
+    putStrLn $ showExercise ex
+    when (exMetronome nextEx /= exMetronome ex) $ putStrLn "\o33[1;31mNEW TEMPO\o33[0m"
+    putStrLn $ showExercise nextEx
+
+    t4 <- do
+        t1 <- playExercise dest scorer False ex t0
+        t2 <- playExercise dest scorer False ex t1
+        t3 <- playExercise dest scorer False ex t2
+        t4 <- playExercise dest scorer False ex t3
+        pure t4
+
+    perf <- scoPerfect scorer
+    pure (perf, t4)
 
 main :: IO ()
 main = do
@@ -283,36 +305,20 @@ main = do
     scorer <- makeScorer dest
     tempo0 <- Rand.evalRandIO $ Rand.uniform [60/t | t <- [60..120]]
     time0 <- playBeat dest scorer (Beat tempo0 (replicate 4 (Any False, [56]))) now
-    go dest scorer Map.empty level0 time0 (Exercise tempo0 (Beat tempo0 [True])) False
+    evalStateT (go dest scorer Map.empty level0 (Exercise tempo0 (Beat tempo0 [True]))) time0
     where
-    go :: MIDI.Connection -> Scorer -> Map.Map Exercise Integer -> Integer -> Clock.POSIXTime -> Exercise -> Bool -> IO ()
-    go dest scorer seen level t0 exercise playGuide = do
-        scoReset scorer
-        putStrLn "\o33[2J\o33[1;1f"
-        score <- scoGetScore scorer
-        lives <- scoGetLives scorer
+    go :: MIDI.Connection -> Scorer -> Map.Map Exercise Integer -> Integer -> Exercise -> StateT Clock.POSIXTime IO ()
+    go dest scorer seen level ex = do
         let targetDiff = 5 * fromIntegral level :: Double
-        putStrLn $ "Level " ++ show level ++ " (diff " ++ show (floor targetDiff :: Integer) ++ ")\n"
-        putStrLn $ "\o33[1;33mLives: " ++ show lives ++ "\o33[0m\n"
-        putStrLn $ "\o33[1;32mScore: " ++ show score ++ "\o33[0m"
-        when (lives < 0) (putStrLn "GAME OVER" >> exitSuccess)
-        putStrLn $ "Difficulty: " ++ show (realToFrac (exerciseWeight exercise) :: Double)
-        putStrLn $ showExercise exercise
-        let options = getCloud (motions (realToFrac targetDiff) seen exercise)
-        exercise' <- if not (null options) then Rand.evalRandIO (Rand.weighted options) else pure exercise
-        when (exMetronome exercise' /= exMetronome exercise) $ putStrLn "\o33[1;31mNEW TEMPO\o33[0m"
-        putStrLn $ showExercise exercise'
+        let options = getCloud (motions (realToFrac targetDiff) seen ex)
+        nextEx <- lift $ if not (null options) then Rand.evalRandIO (Rand.weighted options) else pure ex
 
-        t1 <- do
-            t1 <- playExercise dest scorer playGuide exercise t0
-            t2 <- playExercise dest scorer playGuide exercise t1
-            t3 <- playExercise dest scorer False exercise t2
-            t4 <- playExercise dest scorer False exercise t3
-            pure t4
+        let thisLevel = StateT $ normalMode dest scorer level ex nextEx
+        let nextLevel = go dest scorer (Map.insertWith (+) (approxExercise nextEx) 1 seen) (level+1) nextEx
+        let chain 0 = lift $ putStrLn "GAME OVER"
+            chain n = do
+                win <- thisLevel
+                if win then nextLevel else chain (n-1)
+        chain (3 :: Int)
 
-        perf <- scoPerfect scorer
-        if perf then
-            go dest scorer (Map.insertWith (+) (approxExercise exercise') 1 seen) (level+1) t1 exercise' False
-        else
-            go dest scorer seen level t1 exercise True
 
