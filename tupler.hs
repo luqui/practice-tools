@@ -93,9 +93,6 @@ showExercise (Exercise met beat) = showBeat . (met,) . fmap (\(h,m) -> [hitCh h,
     hitCh (Just False) = '.'
     hitCh Nothing = ' '
 
-approxTempo :: Rational -> Rational
-approxTempo met = fromInteger (floor ((60 / met) / 15))
-
 motions :: Rational -> Map.Map Exercise Integer -> Exercise -> Cloud Exercise
 motions targetDiff seen (Exercise met (Beat subdiv hits)) = weightify <=< pfilter valid . join . puniform $
     [ dup, slice, addOrRemove, halfTime, doubleTime, remeter, prune, rot, split, trim ]
@@ -131,7 +128,7 @@ motions targetDiff seen (Exercise met (Beat subdiv hits)) = weightify <=< pfilte
         (pre, _:post) <- tail . init $ zip (inits hits) (tails hits)
         pure $ mkBeat subdiv (pre ++ post)
 
-    weightify ex = Cloud [(ex, 1 / (1 + (beatWeight ex - targetDiff)^(2::Int))) ]
+    weightify ex = Cloud [(ex, 1 / (1 + (exerciseWeight ex - targetDiff)^(2::Int))) ]
 
     valid (Exercise m (Beat s h)) = and
         [ s' <= 1
@@ -140,14 +137,13 @@ motions targetDiff seen (Exercise met (Beat subdiv hits)) = weightify <=< pfilte
         , length h' <= 80
         , 1/2 <= m && m <= 2
         , genericLength h' * s' < 5  -- no more than 5 seconds per pattern
-        , Exercise (approxTempo m) (Beat s h) `Map.notMember` seen
-        -- , let w = beatWeight (m, Beat s h) in targetDiff - 20 < w && w < targetDiff + 20
+        , approxExercise (Exercise m (Beat s h)) `Map.notMember` seen
         ]
         where
         Beat s' h' = superpose (Beat s h) (Beat m [()])
 
-beatWeight :: Exercise -> Rational
-beatWeight (Exercise met (Beat s h)) = sum
+exerciseWeight :: Exercise -> Rational
+exerciseWeight (Exercise met (Beat s h)) = sum
     [ genericLength h ^ (2 :: Int)
     , genericLength h'
     , fromIntegral (denominator (s/met) ^ (2::Int))
@@ -266,6 +262,9 @@ makeScorer dest = do
                 (modifyIORef scoreRef (\(a,b,c,_,_) -> (a,b,c,False,True)))
                 ((\(_,_,_,_,perf) -> perf)<$> readIORef scoreRef)
 
+approxExercise :: Exercise -> Exercise
+approxExercise (Exercise met b) = Exercise (fromInteger (floor ((60 / met) / 15))) b
+
 
 main :: IO ()
 main = do
@@ -281,7 +280,7 @@ main = do
     go dest scorer Map.empty level0 time0 (Exercise tempo0 (Beat tempo0 [True])) False
     where
     go :: MIDI.Connection -> Scorer -> Map.Map Exercise Integer -> Integer -> Clock.POSIXTime -> Exercise -> Bool -> IO ()
-    go dest scorer seen level t0 (Exercise met b) playGuide = do
+    go dest scorer seen level t0 exercise playGuide = do
         reset scorer
         putStrLn "\o33[2J\o33[1;1f"
         score <- getScore scorer
@@ -291,22 +290,22 @@ main = do
         putStrLn $ "\o33[1;33mLives: " ++ show lives ++ "\o33[0m\n"
         putStrLn $ "\o33[1;32mScore: " ++ show score ++ "\o33[0m"
         when (lives < 0) (putStrLn "GAME OVER" >> exitSuccess)
-        putStrLn $ "Difficulty: " ++ show (realToFrac (beatWeight (Exercise met b)) :: Double)
-        putStrLn $ showExercise (Exercise met b)
-        let options = getCloud (motions (realToFrac targetDiff) seen (Exercise met b))
-        Exercise met' nextBeat <- if not (null options) then Rand.evalRandIO (Rand.weighted options) else pure (Exercise met b)
-        when (met' /= met) $ putStrLn "\o33[1;31mNEW TEMPO\o33[0m"
-        putStrLn $ showExercise (Exercise met' nextBeat)
+        putStrLn $ "Difficulty: " ++ show (realToFrac (exerciseWeight exercise) :: Double)
+        putStrLn $ showExercise exercise
+        let options = getCloud (motions (realToFrac targetDiff) seen exercise)
+        exercise' <- if not (null options) then Rand.evalRandIO (Rand.weighted options) else pure exercise
+        when (exMetronome exercise' /= exMetronome exercise) $ putStrLn "\o33[1;31mNEW TEMPO\o33[0m"
+        putStrLn $ showExercise exercise'
 
         t1 <- do
-            t1 <- playExercise dest scorer playGuide (Exercise met b) t0
-            t2 <- playExercise dest scorer playGuide (Exercise met b) t1
-            t3 <- playExercise dest scorer False (Exercise met b) t2
-            playExercise dest scorer False (Exercise met b) t3
+            t1 <- playExercise dest scorer playGuide exercise t0
+            t2 <- playExercise dest scorer playGuide exercise t1
+            t3 <- playExercise dest scorer False exercise t2
+            playExercise dest scorer False exercise t3
 
         perf <- perfect scorer
         if perf then
-            go dest scorer (Map.insertWith (+) (Exercise (approxTempo met') nextBeat) 1 seen) (level+1) t1 (Exercise met' nextBeat) False
+            go dest scorer (Map.insertWith (+) (approxExercise exercise') 1 seen) (level+1) t1 exercise' False
         else
-            go dest scorer seen level t1 (Exercise met b) True
+            go dest scorer seen level t1 exercise True
 
