@@ -15,6 +15,7 @@ import Data.Monoid (Any(..))
 import qualified System.IO as IO
 import System.Exit (exitSuccess)
 import System.Environment (getArgs)
+import Data.Foldable (traverse_)
 
 newtype Cloud a = Cloud { getCloud :: [(a, Rational)] }
     deriving (Functor)
@@ -182,7 +183,8 @@ data Scorer = Scorer
 
 makeScorer :: MIDI.Connection -> IO Scorer
 makeScorer dest = do
-    stateRef <- newIORef (Nothing, Nothing)
+    time0 <- Clock.getPOSIXTime
+    stateRef <- newIORef (time0, [])
     scoreRef <- newIORef (0 :: Int, 100 :: Double, 3 :: Int, False, True)
 
     changeScore <- pure $ \r -> do
@@ -197,29 +199,23 @@ makeScorer dest = do
            | otherwise -> do
             putStr $ "\o33[1;31m" ++ show r ++ "\o33[0m"
             writeIORef scoreRef (0, score + r, if lifeGuard then lives else lives {- - 1 -}, True, False)
-        writeIORef stateRef (Nothing, Nothing)
 
-    measure <- pure $ \t t' -> do
-        let r = 2 * exp ( -(15*realToFrac (t - t'))^(2::Int) ) - 1
+    measure <- pure $ \t t' -> 2 * exp ( -(15*realToFrac (t - t'))^(2::Int) ) - 1
+
+    applyMeasure <- pure $ \r ->
         if | r < 0 -> changeScore (10 * r)
            | otherwise -> changeScore r
 
         
     onMet' <- pure $ \t -> do
-        state <- readIORef stateRef
-        case state of
-            (Nothing, Just h) -> measure t h
-            (Nothing, Nothing) -> writeIORef stateRef (Just t, Nothing)
-            (Just _t', Nothing) -> changeScore (-10) >> writeIORef stateRef (Just t, Nothing)
-            (Just _t', Just _h') -> error "Impossible!"
+        (_, hits) <- readIORef stateRef
+        traverse_ (applyMeasure . measure t) hits
+        writeIORef stateRef (t, [])
     
     onHit' <- pure $ \h -> do
-        state <- readIORef stateRef
-        case state of
-            (Just t, Nothing) -> measure t h
-            (Nothing, Nothing) -> writeIORef stateRef (Nothing, Just h)
-            (Nothing, Just _h') -> changeScore (-10) >> writeIORef stateRef (Nothing, Just h)
-            (Just _t', Just _h') -> error "Impossible!"
+        (met, hits) <- readIORef stateRef
+        if | measure met h > 0 -> applyMeasure (measure met h)
+           | otherwise -> writeIORef stateRef (met, h:hits)
 
     _ <- forkIO $ do
         IO.hSetBuffering IO.stdin IO.NoBuffering
@@ -235,6 +231,7 @@ makeScorer dest = do
                 ((\(_,_,lives,_,_) -> lives) <$> readIORef scoreRef) 
                 (modifyIORef scoreRef (\(a,b,c,_,_) -> (a,b,c,False,True)))
                 ((\(_,_,_,_,perf) -> perf)<$> readIORef scoreRef)
+
 
 main :: IO ()
 main = do
