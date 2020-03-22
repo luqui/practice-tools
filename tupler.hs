@@ -9,6 +9,7 @@ import qualified Control.Monad.Random as Rand
 import qualified Data.Time.Clock.POSIX as Clock
 import Control.Concurrent (forkIO, threadDelay)
 import qualified Data.Map as Map
+import qualified Data.Char as Char
 import Data.Tuple (swap)
 import Data.IORef
 import Data.Monoid (Any(..))
@@ -291,6 +292,46 @@ normalMode dest scorer level ex nextEx t0 = do
     perf <- scoPerfect scorer
     pure (perf, t4)
 
+practiceMode :: MIDI.Connection -> Scorer -> Integer -> Exercise -> Clock.POSIXTime -> IO Clock.POSIXTime
+practiceMode conn scorer level ex _ = do
+    let countIn ex' t0 = do
+            t1 <- playExercise conn scorer False (Exercise (exMetronome ex') (const False <$> exBeat ex')) t0
+            t2 <- playExercise conn scorer False (Exercise (exMetronome ex') (const False <$> exBeat ex')) t1
+            pure t2
+            
+    let tryEx ex' nextEx' t0 = do
+            t1 <- countIn ex' t0
+            (win,t2) <- normalMode conn scorer level ex' nextEx' t1
+            if win then pure t2 else practiceMode conn scorer level ex' t2
+
+    let showMenu = do
+            putStrLn "\o33[2J\o33[1;1f"
+            putStrLn "Practice mode"
+            putStrLn $ showExercise ex
+
+            putStrLn "(r) Retry"
+            putStrLn "(s) Slower Tempo"
+            putStrLn "(<number>) Subdivide Metronome"
+
+            let cont t = do
+                    (win,t1) <- normalMode conn scorer level ex ex t 
+                    if win then pure t1 else showMenu
+            opt <- getChar
+            t0 <- Clock.getPOSIXTime
+            case opt of
+                'r' -> countIn ex t0 >>= cont
+                's' -> tryEx (scaleTime (4/3) ex) ex t0 >>= cont
+                n | Char.isDigit n, read [n] > (0 :: Int)
+                    -> tryEx (scaleMetronome (1 % read [n]) ex) ex t0 >>= cont
+                _ -> showMenu
+    showMenu
+
+scaleTime :: Rational -> Exercise -> Exercise
+scaleTime s (Exercise m (Beat subdiv hits)) = Exercise (s*m) (Beat (s*subdiv) hits)
+
+scaleMetronome :: Rational -> Exercise -> Exercise
+scaleMetronome s (Exercise m b) = Exercise (s*m) b
+
 main :: IO ()
 main = do
     IO.hSetBuffering IO.stdin IO.NoBuffering
@@ -315,7 +356,9 @@ main = do
 
         let thisLevel = StateT $ normalMode dest scorer level ex nextEx
         let nextLevel = go dest scorer (Map.insertWith (+) (approxExercise nextEx) 1 seen) (level+1) nextEx
-        let chain 0 = lift $ putStrLn "GAME OVER"
+        let chain 0 = do
+                () <- StateT $ (fmap.fmap) ((),) $ practiceMode dest scorer level ex
+                nextLevel
             chain n = do
                 win <- thisLevel
                 if win then nextLevel else chain (n-1)
