@@ -15,7 +15,6 @@ import Data.IORef
 import Data.Monoid (Any(..))
 import qualified System.IO as IO
 import System.Environment (getArgs)
-import Data.Foldable (traverse_)
 import Control.Monad.Trans.State
 import Control.Monad.Trans.Class
 
@@ -219,6 +218,7 @@ openDest name = do
 data Scorer = Scorer
     { scoOnMet :: Clock.POSIXTime -> IO ()
     , scoOnHit :: Clock.POSIXTime -> IO ()
+    , scoInitState :: IO ()
     , scoGetScore :: IO Double
     , scoReset :: IO ()
     , scoPerfect :: IO Bool
@@ -226,8 +226,7 @@ data Scorer = Scorer
 
 makeScorer :: MIDI.Connection -> IO Scorer
 makeScorer dest = do
-    time0 <- Clock.getPOSIXTime
-    stateRef <- newIORef (time0, [])
+    stateRef <- newIORef (Nothing, Nothing)
     scoreRef <- newIORef (0 :: Int, 100 :: Double, True)
 
     changeScore <- pure $ \r -> do
@@ -245,23 +244,35 @@ makeScorer dest = do
 
     measure <- pure $ \t t' -> 2 * exp ( -(15*realToFrac (t - t'))^(2::Int) ) - 1
 
+    initState' <- pure $ writeIORef stateRef (Nothing, Nothing)
+
     applyMeasure <- pure $ \r ->
         if | r < 0 -> changeScore (10 * r)
            | otherwise -> changeScore r
 
     onMet' <- pure $ \t -> do
-        (_, hits) <- readIORef stateRef
-        traverse_ (applyMeasure . measure t) hits
-        writeIORef stateRef (t, [])
+        (mmet, hits) <- readIORef stateRef
+        case (mmet,hits) of
+            (Nothing, Nothing) -> writeIORef stateRef (Just t, Nothing)
+            (Just t', Nothing)  -> changeScore (-10) >> writeIORef stateRef (Just t', Nothing)
+            (Nothing, Just h)
+                | measure t h > 0 -> applyMeasure (measure t h) >> writeIORef stateRef (Nothing, Nothing)
+                | otherwise       -> changeScore (-10)          >> writeIORef stateRef (Just t, Nothing)
+            _ -> error "impossible"
     
     onHit' <- pure $ \h -> do
         MIDI.send dest (MIDI.MidiMessage 1 (MIDI.NoteOn 37 100))
         MIDI.send dest (MIDI.MidiMessage 1 (MIDI.NoteOn 37 0))
-        (met, hits) <- readIORef stateRef
-        if | measure met h > 0 -> applyMeasure (measure met h)
-           | otherwise -> writeIORef stateRef (met, h:hits)
+        (mmet, hits) <- readIORef stateRef
+        case (mmet, hits) of
+            (Nothing, Nothing) -> writeIORef stateRef (Nothing, Just h)
+            (Nothing, Just _) -> changeScore (-10) >> writeIORef stateRef (Nothing, Just h)
+            (Just t, Nothing)
+                | measure t h > 0 -> applyMeasure (measure t h) >> writeIORef stateRef (Nothing, Nothing)
+                | otherwise -> changeScore (-10) >> writeIORef stateRef (Nothing, Just h)
+            _ -> error "impossible"
 
-    pure $ Scorer onMet' onHit'
+    pure $ Scorer onMet' onHit' initState'
                 ((\(_,score,_) -> score) <$> readIORef scoreRef)
                 (modifyIORef scoreRef (\(a,b,_) -> (a,b,True)))
                 ((\(_,_,perf) -> perf)<$> readIORef scoreRef)
@@ -271,7 +282,6 @@ approxExercise (Exercise met b) = Exercise (fromInteger (floor ((60 / met) / 15)
 
 normalMode :: MIDI.Connection -> Scorer -> Integer -> Exercise -> Exercise -> Clock.POSIXTime -> IO (Bool, Clock.POSIXTime)
 normalMode dest scorer level ex nextEx t0 = do
-    scoReset scorer
     putStrLn "\o33[2J\o33[1;1f"
 
     score <- scoGetScore scorer
@@ -282,15 +292,18 @@ normalMode dest scorer level ex nextEx t0 = do
     when (exMetronome nextEx /= exMetronome ex) $ putStrLn "\o33[1;31mNEW TEMPO\o33[0m"
     putStrLn $ showExercise nextEx
 
-    t4 <- do
-        t1 <- playExercise dest scorer False ex t0
-        t2 <- playExercise dest scorer False ex t1
-        t3 <- playExercise dest scorer False ex t2
-        t4 <- playExercise dest scorer False ex t3
-        pure t4
-
-    perf <- scoPerfect scorer
-    pure (perf, t4)
+    let go 4 _ tin = pure (True, tin)
+        go _ 4 tin = pure (False, tin)
+        go wins losses tin = do
+            putStrLn $ "    " ++ show wins ++ " / " ++ show losses
+            scoReset scorer
+            t1 <- playExercise dest scorer False ex tin
+            perf <- scoPerfect scorer
+            if perf then
+                go (wins+1) 0 t1
+            else
+                go 0 (losses+1) t1
+    go 0 0 t0
 
 practiceMode :: MIDI.Connection -> Scorer -> Integer -> Exercise -> Clock.POSIXTime -> IO Clock.POSIXTime
 practiceMode conn scorer level ex _ = do
@@ -300,6 +313,7 @@ practiceMode conn scorer level ex _ = do
             pure t2
             
     let tryEx ex' nextEx' t0 = do
+            scoInitState scorer
             t1 <- countIn ex' t0
             (win,t2) <- normalMode conn scorer level ex' nextEx' t1
             if win then pure t2 else practiceMode conn scorer level ex' t2
@@ -312,6 +326,7 @@ practiceMode conn scorer level ex _ = do
             putStrLn "(r) Retry"
             putStrLn "(s) Slower Tempo"
             putStrLn "(<number>) Subdivide Metronome"
+            putStrLn "(k) Skip"
 
             let cont t = do
                     (win,t1) <- normalMode conn scorer level ex ex t 
@@ -321,6 +336,7 @@ practiceMode conn scorer level ex _ = do
             case opt of
                 'r' -> countIn ex t0 >>= cont
                 's' -> tryEx (scaleTime (4/3) ex) ex t0 >>= cont
+                'k' -> pure t0
                 n | Char.isDigit n, read [n] > (0 :: Int)
                     -> tryEx (scaleMetronome (1 % read [n]) ex) ex t0 >>= cont
                 _ -> showMenu
@@ -356,12 +372,6 @@ main = do
 
         let thisLevel = StateT $ normalMode dest scorer level ex nextEx
         let nextLevel = go dest scorer (Map.insertWith (+) (approxExercise nextEx) 1 seen) (level+1) nextEx
-        let chain 0 = do
-                () <- StateT $ (fmap.fmap) ((),) $ practiceMode dest scorer level ex
-                nextLevel
-            chain n = do
-                win <- thisLevel
-                if win then nextLevel else chain (n-1)
-        chain (3 :: Int)
-
-
+        win <- thisLevel
+        when (not win) . StateT . (fmap.fmap) ((),) $ practiceMode dest scorer level ex
+        nextLevel
