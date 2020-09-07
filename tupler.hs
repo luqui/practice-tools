@@ -1,4 +1,4 @@
-{-# OPTIONS -Wall #-}
+{-# OPTIONS -Wall -Wno-type-defaults #-}
 {-# LANGUAGE MultiWayIf, DeriveFunctor, TupleSections, LambdaCase #-}
 
 import qualified System.MIDI as MIDI
@@ -134,7 +134,9 @@ motions targetDiff seen (Exercise met (Beat subdiv hits)) = weightify <=< pfilte
     valid (Exercise m (Beat s h)) = and
         [ s' <= 1
         , s < 1
-        , or h
+        -- At least half as many hits as metronome hits because this thing
+        -- has a penchant for picking really boring rhythms
+        , 2 * length [ () | (Just True,_) <- h' ] >= length [ () | (_, Just _) <- h' ] 
         , length h' <= 80
         , 1/2 <= m && m <= 2
         , genericLength h' * s' < 5  -- no more than 5 seconds per pattern
@@ -159,8 +161,8 @@ exerciseWeight (Exercise met (Beat s h)) = sum
 divisors :: (Integral a) => a -> [a]
 divisors n = [ m | m <- [1..n], n `mod` m == 0 ]
 
-playBeat :: MIDI.Connection -> Scorer -> Beat (Any, [Int]) -> Clock.POSIXTime -> IO Clock.POSIXTime
-playBeat dest scorer beat t0 = do
+playBeat :: MIDIConns -> Scorer -> Beat (Any, [Int]) -> Clock.POSIXTime -> IO Clock.POSIXTime
+playBeat conns scorer beat t0 = do
     let subdiv = realToFrac (bSubdiv beat)
     let finalTime = t0 + subdiv * genericLength (bHits beat)
 
@@ -169,23 +171,35 @@ playBeat dest scorer beat t0 = do
         forM_ (zip [t0, t0 + subdiv..] (bHits beat)) $ \(t,(expect, notes)) -> do
             when (getAny expect) $ scoOnMet scorer t
             forM_ notes $ \n -> do
-                MIDI.send dest (MIDI.MidiMessage 1 (MIDI.NoteOn n 100))
+                MIDI.send (midiOut conns) (MIDI.MidiMessage 1 (MIDI.NoteOn n 64))
+                waitUntil $ t + min (1/16) subdiv
+                MIDI.send (midiOut conns) (MIDI.MidiMessage 1 (MIDI.NoteOn n 0))
             waitUntil $ t + subdiv
-            forM_ notes $ \n -> MIDI.send dest (MIDI.MidiMessage 1 (MIDI.NoteOn n 0))
+            forM_ notes $ \n -> MIDI.send (midiOut conns) (MIDI.MidiMessage 1 (MIDI.NoteOn n 0))
 
     pure finalTime
 
-playExercise :: MIDI.Connection -> Scorer -> Bool -> Exercise -> Clock.POSIXTime -> IO Clock.POSIXTime
-playExercise dest scorer playGuide (Exercise met b) t0 = do
-    tf <- playBeat dest scorer play t0
+playExercise :: MIDIConns -> Scorer -> Bool -> Exercise -> Clock.POSIXTime -> IO Clock.POSIXTime
+playExercise conns scorer playGuide (Exercise met b) t0 = do
+    tf <- playBeat conns scorer play t0
     let go = do
             now <- Clock.getPOSIXTime
-            let waitMillis = floor (1000 * (tf - now))
+            when (now < tf) $ do
+                nextEvent <- MIDI.getNextEvent (midiIn conns)
+                case nextEvent of
+                    Nothing -> threadDelay 1000 
+                    Just (MIDI.MidiEvent _ (MIDI.MidiMessage _ (MIDI.NoteOn _ v))) | v /= 0 ->
+                        scoOnHit scorer =<< Clock.getPOSIXTime
+                    _ -> pure ()
+                go
+
+            {-
             ready <- IO.hWaitForInput IO.stdin (max 0 waitMillis)
             when ready $ do
                 _ <- getChar
                 scoOnHit scorer =<< Clock.getPOSIXTime
                 go
+            -}
     go
     waitUntil tf
     pure tf
@@ -215,6 +229,14 @@ openDest name = do
     print cand
     MIDI.openDestination cand
 
+openSource :: String -> IO MIDI.Connection
+openSource name = do
+    cand <- fmap head . filterM (fmap (== name) . MIDI.getName) =<< MIDI.enumerateSources
+    print cand
+    conn <- MIDI.openSource cand Nothing
+    MIDI.start conn
+    pure conn
+
 data Scorer = Scorer
     { scoOnMet :: Clock.POSIXTime -> IO ()
     , scoOnHit :: Clock.POSIXTime -> IO ()
@@ -224,8 +246,13 @@ data Scorer = Scorer
     , scoPerfect :: IO Bool
     }
 
-makeScorer :: MIDI.Connection -> IO Scorer
-makeScorer dest = do
+data MIDIConns = MIDIConns
+    { midiIn :: MIDI.Connection
+    , midiOut :: MIDI.Connection
+    }
+
+makeScorer :: MIDIConns -> IO Scorer
+makeScorer conns = do
     stateRef <- newIORef (Nothing, Nothing)
     scoreRef <- newIORef (0 :: Int, 100 :: Double, True)
 
@@ -261,8 +288,8 @@ makeScorer dest = do
             _ -> error "impossible"
     
     onHit' <- pure $ \h -> do
-        MIDI.send dest (MIDI.MidiMessage 1 (MIDI.NoteOn 37 100))
-        MIDI.send dest (MIDI.MidiMessage 1 (MIDI.NoteOn 37 0))
+        --MIDI.send (midiOut conns) (MIDI.MidiMessage 1 (MIDI.NoteOn 37 100))
+        --MIDI.send (midiOut conns) (MIDI.MidiMessage 1 (MIDI.NoteOn 37 0))
         (mmet, hits) <- readIORef stateRef
         case (mmet, hits) of
             (Nothing, Nothing) -> writeIORef stateRef (Nothing, Just h)
@@ -280,8 +307,8 @@ makeScorer dest = do
 approxExercise :: Exercise -> Exercise
 approxExercise (Exercise met b) = Exercise (fromInteger (floor ((60 / met) / 15))) b
 
-normalMode :: MIDI.Connection -> Scorer -> Integer -> Exercise -> Exercise -> Clock.POSIXTime -> IO (Bool, Clock.POSIXTime)
-normalMode dest scorer level ex nextEx t0 = do
+normalMode :: MIDIConns -> Scorer -> Integer -> Exercise -> Exercise -> Clock.POSIXTime -> IO (Bool, Clock.POSIXTime)
+normalMode conns scorer level ex nextEx t0 = do
     putStrLn "\o33[2J\o33[1;1f"
 
     score <- scoGetScore scorer
@@ -297,7 +324,7 @@ normalMode dest scorer level ex nextEx t0 = do
         go wins losses tin = do
             putStrLn $ "    " ++ show wins ++ " / " ++ show losses
             scoReset scorer
-            t1 <- playExercise dest scorer False ex tin
+            t1 <- playExercise conns scorer False ex tin
             perf <- scoPerfect scorer
             if perf then
                 go (wins+1) 0 t1
@@ -305,18 +332,18 @@ normalMode dest scorer level ex nextEx t0 = do
                 go 0 (losses+1) t1
     go 0 0 t0
 
-practiceMode :: MIDI.Connection -> Scorer -> Integer -> Exercise -> Clock.POSIXTime -> IO Clock.POSIXTime
-practiceMode conn scorer level ex _ = do
+practiceMode :: MIDIConns -> Scorer -> Integer -> Exercise -> Clock.POSIXTime -> IO Clock.POSIXTime
+practiceMode conns scorer level ex _ = do
     let countIn ex' t0 = do
-            t1 <- playExercise conn scorer False (Exercise (exMetronome ex') (const False <$> exBeat ex')) t0
-            t2 <- playExercise conn scorer False (Exercise (exMetronome ex') (const False <$> exBeat ex')) t1
+            t1 <- playExercise conns scorer False (Exercise (exMetronome ex') (const False <$> exBeat ex')) t0
+            t2 <- playExercise conns scorer False (Exercise (exMetronome ex') (const False <$> exBeat ex')) t1
             pure t2
             
     let tryEx ex' nextEx' t0 = do
             scoInitState scorer
             t1 <- countIn ex' t0
-            (win,t2) <- normalMode conn scorer level ex' nextEx' t1
-            if win then pure t2 else practiceMode conn scorer level ex' t2
+            (win,t2) <- normalMode conns scorer level ex' nextEx' t1
+            if win then pure t2 else practiceMode conns scorer level ex' t2
 
     let showMenu = do
             putStrLn "\o33[2J\o33[1;1f"
@@ -329,7 +356,7 @@ practiceMode conn scorer level ex _ = do
             putStrLn "(k) Skip"
 
             let cont t = do
-                    (win,t1) <- normalMode conn scorer level ex ex t 
+                    (win,t1) <- normalMode conns scorer level ex ex t 
                     if win then pure t1 else showMenu
             opt <- getChar
             t0 <- Clock.getPOSIXTime
@@ -351,27 +378,39 @@ scaleMetronome s (Exercise m b) = Exercise (s*m) b
 main :: IO ()
 main = do
     IO.hSetBuffering IO.stdin IO.NoBuffering
+    IO.hSetBuffering IO.stdout IO.NoBuffering
     IO.hSetEcho IO.stdin False
 
-    dest <- openDest "IAC Bus 1"
+    putStrLn "Sources"
+    putStrLn "-------"
+    mapM_ (putStrLn <=< MIDI.getName) =<< MIDI.enumerateSources
+
+    putStrLn ""
+    putStrLn "Destinations"
+    putStrLn "------------"
+    mapM_ (putStrLn <=< MIDI.getName) =<< MIDI.enumerateDestinations
+
+    [sourceName, destName] <- getArgs
+
+    conns <- MIDIConns <$> openSource sourceName <*> openDest destName
     now <- Clock.getPOSIXTime
     level0 <- getArgs >>= pure . \case
-                [] -> 0
-                [n] -> read n
+                [_,_] -> 0
+                [_,_,n] -> read n
                 _ -> error "Unknown argument"
-    scorer <- makeScorer dest
+    scorer <- makeScorer conns
     tempo0 <- Rand.evalRandIO $ Rand.uniform [60/t | t <- [60..120]]
-    time0 <- playBeat dest scorer (Beat tempo0 (replicate 4 (Any False, [56]))) now
-    evalStateT (go dest scorer Map.empty level0 (Exercise tempo0 (Beat tempo0 [True]))) time0
+    time0 <- playBeat conns scorer (Beat tempo0 (replicate 4 (Any False, [56]))) now
+    evalStateT (go conns scorer Map.empty level0 (Exercise tempo0 (Beat tempo0 [True]))) time0
     where
-    go :: MIDI.Connection -> Scorer -> Map.Map Exercise Integer -> Integer -> Exercise -> StateT Clock.POSIXTime IO ()
-    go dest scorer seen level ex = do
+    go :: MIDIConns -> Scorer -> Map.Map Exercise Integer -> Integer -> Exercise -> StateT Clock.POSIXTime IO ()
+    go conns scorer seen level ex = do
         let targetDiff = 5 * fromIntegral level :: Double
         let options = getCloud (motions (realToFrac targetDiff) seen ex)
         nextEx <- lift $ if not (null options) then Rand.evalRandIO (Rand.weighted options) else pure ex
 
-        let thisLevel = StateT $ normalMode dest scorer level ex nextEx
-        let nextLevel = go dest scorer (Map.insertWith (+) (approxExercise nextEx) 1 seen) (level+1) nextEx
+        let thisLevel = StateT $ normalMode conns scorer level ex nextEx
+        let nextLevel = go conns scorer (Map.insertWith (+) (approxExercise nextEx) 1 seen) (level+1) nextEx
         win <- thisLevel
-        when (not win) . StateT . (fmap.fmap) ((),) $ practiceMode dest scorer level ex
+        when (not win) . StateT . (fmap.fmap) ((),) $ practiceMode conns scorer level ex
         nextLevel
