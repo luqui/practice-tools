@@ -4,8 +4,8 @@
 import Prelude hiding (seq)
 import qualified JSMIDI as MIDI
 import qualified Data.Set as Set
-import Data.List (isPrefixOf, tails, delete, nub, sort, sortBy, intercalate)
-import Control.Monad (forM_, void, join, replicateM, when)
+import Data.List (isPrefixOf, tails, delete, nub, sort, sortBy, intersperse, intercalate)
+import Control.Monad (forM_, forM, void, join, replicateM, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Arrow (second)
 import Control.Concurrent (threadDelay)
@@ -93,6 +93,7 @@ challenges =
         , "rooted tetrachords" --> game (rootedChordGame allTetrachordTypes)
         , "topped tetrachords" --> game (toppedChordGame allTetrachordTypes)
         , "tridas + common tetrachords" --> game (genChordGame (triadTypes ++ commonTetrachordTypes))
+        , "2-5-1s" --> game chordGame251
         , "all chords"    --> game (genChordGame allTetrachordTypes)
         ]
     , "scales" -->
@@ -319,6 +320,39 @@ toppedChordGame chordTypes = Rand.uniform [48..71] >>= \baseNote -> replicateM 6
         chtype <- Rand.uniform chordTypes
         root <- Rand.uniform chtype
         pure $ toRound . (:[]) . reverse . sort $ map (\x -> (x - root - 1) `mod` 12 + 1 + baseNote) chtype
+
+invertNote :: Int -> Int -> Cloud Int
+invertNote center n = if cand == 0 then ((center-6) + ) <$> Rand.uniform [0, 12] else pure (center - 6 + cand)
+    where
+    cand = n `mod` 12
+
+chordGame251 :: Cloud [Round]
+chordGame251 = forM [0..66] $ \ex -> do
+    baseNote <- Rand.uniform [0..11]
+    let range = (ex * 24) `div` 66
+    center <- Rand.uniform [60 - range..60 + range]
+    chType <- Rand.uniform [
+        [  [ baseNote + 2, baseNote + 5, baseNote + 9, baseNote + 12 ] -- iim7
+         , [ baseNote + 2, baseNote + 5, baseNote + 7, baseNote + 11 ] -- V7
+         , [ baseNote, baseNote + 4, baseNote + 7, baseNote + 11 ]     -- I∆
+        ],
+        [  [ baseNote + 2, baseNote + 5, baseNote + 8, baseNote + 12 ] -- iiø7
+         , [ baseNote + 2, baseNote + 5, baseNote + 8, baseNote + 11 ] -- Vo7
+         , [ baseNote, baseNote + 3, baseNote + 7, baseNote + 9 ]     -- im6
+        ],
+        [  [ baseNote + 2, baseNote + 5, baseNote + 9, baseNote + 12 ] -- iim7
+         , [ baseNote + 2, baseNote + 5, baseNote + 7, baseNote + 11 ] -- V7
+         , [ baseNote, baseNote + 3, baseNote + 7, baseNote + 10 ]     -- im7
+        ],
+        [  [ baseNote + 2, baseNote + 5, baseNote + 8, baseNote + 12 ] -- iiø7
+         , [ baseNote + 2, baseNote + 5, baseNote + 8, baseNote + 11 ] -- Vo7
+         , [ baseNote, baseNote + 3, baseNote + 7, baseNote + 11 ]     -- im∆7
+        ]]
+    
+    noteses <- (mapM.mapM) (invertNote center) chType
+    pure $ Round "" (intersperse [] noteses) noteses
+
+    
 
 perfectPitchGame :: Cloud [Round]
 perfectPitchGame  = concat <$> sequenceA
