@@ -3,6 +3,7 @@
 
 import qualified System.MIDI as MIDI
 import Control.Monad (filterM, guard, forM_, ap, join, (<=<), when)
+import Control.Arrow (second)
 import Data.Ratio
 import Data.List (inits, tails, genericLength, genericReplicate, transpose)
 import qualified Control.Monad.Random as Rand
@@ -50,6 +51,10 @@ mkBeat s h = Beat s (cycleGenerator h)
 
 rGcd :: Rational -> Rational -> Rational
 rGcd r r' = gcd (numerator r) (numerator r') % lcm (denominator r) (denominator r')
+
+alterFirst :: (a -> a) -> Beat a -> Beat a
+alterFirst f (Beat subdiv (h:hits)) = Beat subdiv (f h : hits)
+alterFirst _ (Beat _ []) = error "Beat should have at least one hit?"
 
 superpose :: (Eq a, Eq b) => Beat a -> Beat b -> Beat (Maybe a, Maybe b)
 superpose (Beat subdiv hits) (Beat subdiv' hits') = 
@@ -205,8 +210,8 @@ playExercise conns scorer playGuide (Exercise met b) t0 = do
     pure tf
   where
     guide = superpose b (Beat met [()])
-    play | playGuide = fmap (\(h,m) -> metNote m <> hitNote h) guide
-         | otherwise = fmap (\(h,m) -> metNote m <> silentHitNote h) guide
+    play | playGuide = alterFirst (second (map (+12))) $ fmap (\(h,m) -> metNote m <> hitNote h) guide
+         | otherwise = alterFirst (second (map (+12))) $ fmap (\(h,m) -> metNote m <> silentHitNote h) guide
 
     metNote (Just ()) = (Any False, [56])
     metNote Nothing = mempty

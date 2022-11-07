@@ -43,12 +43,18 @@ main = do
     [sourceName, destName] <- getArgs
 
     schedVar <- newMVar Map.empty
+    lastNoteOnVar <- newMVar Map.empty
 
     dest <- openDest destName
-    source <- openSource sourceName $ \(MIDI.MidiEvent ts msg) ->
+    source <- openSource sourceName $ \(MIDI.MidiEvent ts msg) -> do
+        let schedule ts event = modifyMVar_ schedVar (pure . Map.insert ts event)
         case msg of
-            MIDI.MidiMessage ch (MIDI.NoteOn n v) -> 
-                modifyMVar_ schedVar (pure . Map.insert ts (MIDI.MidiMessage ch (MIDI.NoteOn n v)))
+            MIDI.MidiMessage ch (MIDI.NoteOn n v) -> do
+                schedule ts (MIDI.MidiMessage ch (MIDI.NoteOn n v))
+                lastNoteOn <- readMVar lastNoteOnVar 
+                case Map.lookup n lastNoteOn of
+                    Nothing -> pure ()
+                    Just ts' -> schedule (ts + (ts - ts')) (MIDI.MidiMessage ch (MIDI.NoteOn n v))
             MIDI.MidiMessage ch (MIDI.NoteOff n v) ->
                 modifyMVar_ schedVar (pure . Map.insert ts (MIDI.MidiMessage ch (MIDI.NoteOff n v)))
             m -> MIDI.send dest m
@@ -66,6 +72,11 @@ main = do
                 | ts <= window1 -> do
                     putMVar schedVar sched'
                     MIDI.send dest e
+
+                    case e of
+                        MIDI.MidiMessage _ (MIDI.NoteOn n v) | v > 0 ->
+                            modifyMVar_ lastNoteOnVar (pure . Map.insert n window0)
+                        _ -> pure ()
                 | otherwise -> do
                     putMVar schedVar sched
                     yield
