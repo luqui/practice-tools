@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Just Intonation Interval Trainer</title>
+    <style>
+        body {
+            font-family: system-ui, sans-serif;
+            max-width: 800px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+            line-height: 1.5;
+        }
+        button {
+            padding: 0.5rem 1rem;
+            margin: 0.5rem;
+            font-size: 1rem;
+        }
+        #result {
+            margin: 1rem 0;
+            padding: 1rem;
+            border-radius: 4px;
+        }
+        .correct {
+            background-color: #90EE90;
+        }
+        .incorrect {
+            background-color: #FFB6C1;
+        }
+        input {
+            padding: 0.5rem;
+            font-size: 1rem;
+        }
+        #guess {
+            width: 120px;
+        }
+        .settings {
+            margin: 1rem 0;
+            padding: 1rem;
+            background: #f0f0f0;
+            border-radius: 4px;
+        }
+        .reference {
+            margin-top: 2rem;
+            padding: 1rem;
+            background: #f8f8f8;
+            border-radius: 4px;
+        }
+        .reference table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 1rem;
+        }
+        .reference th {
+            border: 1px solid #ddd;
+            padding: 0.5rem;
+            text-align: center;
+            background: #eee;
+        }
+        .reference td {
+            border: 1px solid #ddd;
+            padding: 0.5rem;
+            text-align: center;
+        }
+        .reference tr:not(:first-child) {
+            cursor: pointer;
+        }
+        .reference tr:not(:first-child):hover {
+            background-color: #f0f0f0;
+        }
+        .reference-toggle {
+            cursor: pointer;
+            padding: 0.5rem;
+            background: #eee;
+            border: none;
+            width: 100%;
+            text-align: left;
+            font-size: 1rem;
+        }
+        .score {
+            font-size: 1.2rem;
+            margin: 1rem 0;
+        }
+        .mastery-bar {
+            height: 20px;
+            background: #eee;
+            border-radius: 10px;
+            margin: 5px 0;
+            overflow: hidden;
+        }
+        .mastery-progress {
+            height: 100%;
+            background: linear-gradient(90deg, #ff9999 0%, #90EE90 100%);
+            transition: width 0.3s ease;
+        }
+        .stats {
+            margin: 1rem 0;
+            padding: 1rem;
+            background: #f0f0f0;
+            border-radius: 4px;
+        }
+        .reference td.mastery {
+            background-color: #f0f0f0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Just Intonation Interval Trainer</h1>
+    <p>Listen to the intervals and enter either:</p>
+    <ul>
+        <li>A ratio (e.g., "3:2" for a perfect fifth)</li>
+        <li>Number of cents (e.g., "702")</li>
+    </ul>
+    
+    <div class="settings">
+        <p><label for="maxDenominator">Maximum denominator:</label>
+        <input type="number" id="maxDenominator" value="5" min="2" max="32"></p>
+        <p><label for="customIntervals">Custom intervals (comma separated):</label>
+        <input type="string" id="customIntervals" value="" placeholder="e.g. 7:4, 9:5, 11:6"></p>
+    </div>
+
+    <div class="stats">
+        <h3>Learning Progress</h3>
+        <p>Estimated overall mastery: <span id="overallMastery">0</span>%</p>
+        <p><span id="averageImprovement">0</span></p>
+    </div>
+
+    <div class="score">
+        Score: <span id="score">0</span> / <span id="total">0</span>
+        <button id="resetScore">Reset Score</button>
+    </div>
+
+    <div>
+        <button id="playButton">Play New Interval</button>
+        <button id="replayButton" disabled>Replay Current Interval</button>
+    </div>
+    
+    <div>
+        <label>Your guess: </label>
+        <input type="text" id="guess" placeholder="e.g., 3:2 or 702">
+        <button id="submitGuess" disabled>Submit Guess</button>
+    </div>
+    
+    <div id="result"></div>
+
+    <div class="reference">
+        <button class="reference-toggle" id="toggleReference">▶ Show/Hide Reference Table</button>
+        <div id="referenceTable" style="display: none;"></div>
+    </div>
+    
+    <script>
+        let audioContext;
+        let currentRatio;
+        let currentTimbre;
+        let maxDenominator = 5;
+        let customIntervals = [];
+        let score = 0;
+        let totalQuestions = 0;
+        let currentBaseFrequency = 440;
+
+        // Learning model variables
+        const learningData = {
+            intervals: new Map(),
+            // Prior parameters for Beta distribution
+            alpha0: 1,
+            beta0: 1,
+            // Temperature parameter for sampling (higher = more random)
+            temperature: 0.2
+        }
+
+        function getExponentialWeight(age, halfLife = 6) {
+            // age is number of attempts ago
+            // halfLife is number of attempts after which weight becomes 0.5
+            return Math.pow(2, -age / halfLife);
+        }
+
+        function getLearningTrend(data) {
+            if (data.recentAttempts.length < 2) return null;
+            
+            // Calculate weighted average for first and second half of attempts
+            const attempts = data.recentAttempts;
+            const midPoint = Math.floor(attempts.length / 2);
+            
+            let recentSum = 0;
+            let recentWeightSum = 0;
+            let olderSum = 0;
+            let olderWeightSum = 0;
+            
+            // Calculate weighted averages for both halves
+            attempts.forEach((correct, index) => {
+                const weight = getExponentialWeight(attempts.length - 1 - index);
+                if (index >= midPoint) {
+                    recentSum += correct ? weight : 0;
+                    recentWeightSum += weight;
+                } else {
+                    olderSum += correct ? weight : 0;
+                    olderWeightSum += weight;
+                }
+            });
+            
+            const recentAvg = recentSum / recentWeightSum;
+            const olderAvg = olderSum / olderWeightSum;
+            
+            return {
+                trend: recentAvg - olderAvg,
+                recentAccuracy: recentAvg,
+                improvement: (recentAvg - olderAvg) / olderAvg * 100
+            };
+        };
+        
+        function initAudio() {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        
+        function generateRandomTimbre() {
+            const overtones = [
+                1.0,
+                Math.random() / 2,
+                Math.random() / 3,
+                Math.random() / 4,
+                Math.random() / 5,
+                Math.random() / 6
+            ];
+            return overtones;
+        }
+        
+        function createComplexTone(frequency, startTime, duration, overtoneAmplitudes) {
+            const gainNode = audioContext.createGain();
+            gainNode.connect(audioContext.destination);
+            
+            gainNode.gain.setValueAtTime(0, startTime);
+            gainNode.gain.linearRampToValueAtTime(0.2, startTime + 0.02);
+            gainNode.gain.linearRampToValueAtTime(0.2, startTime + duration - 0.1);
+            gainNode.gain.linearRampToValueAtTime(0, startTime + duration);
+            
+            overtoneAmplitudes.forEach((amplitude, index) => {
+                const oscillator = audioContext.createOscillator();
+                const overtoneGain = audioContext.createGain();
+                
+                oscillator.type = 'sine';
+                oscillator.frequency.value = frequency * (index + 1);
+                
+                overtoneGain.gain.value = amplitude;
+                
+                oscillator.connect(overtoneGain);
+                overtoneGain.connect(gainNode);
+                
+                oscillator.start(startTime);
+                oscillator.stop(startTime + duration);
+            });
+        }
+
+        function gcd(a, b) {
+            while (b) {
+                let t = b;
+                b = a % b;
+                a = t;
+            }
+            return a;
+        }
+
+        function parseGuess(guessStr) {
+            guessStr = guessStr.trim();
+            if (guessStr.includes(':')) {
+                // Parse ratio
+                const [num, den] = guessStr.split(':').map(x => parseInt(x.trim()));
+                if (!num || !den) return null;
+                return { ratio: num / den, cents: 1200 * Math.log2(num / den) };
+            } else {
+                // Parse cents
+                const cents = parseFloat(guessStr);
+                if (isNaN(cents)) return null;
+                return { ratio: Math.pow(2, cents/1200), cents: cents };
+            }
+        }
+
+        function generateAllRatios(maxDen) {
+            const ratios = [];
+
+            const gen = (num, den) => {
+                const divisor = gcd(num, den);
+                return { numerator: num / divisor, denominator: den / divisor, ratio: num / den, cents: 1200 * Math.log2(num / den) };
+            };
+
+            if (customIntervals.length > 0) {
+                console.log('customIntervals = ', customIntervals);
+                return customIntervals.map((i) => gen(i[0], i[1]));
+            }
+
+            for (let den = 1; den <= maxDen; den++) {
+                for (let num = den; num <= den * 2; num++) {
+                    const ratio = num / den;
+                    if (ratio > 1 && ratio < 2) {
+                        const simplified = gen(num, den);
+                        
+                        const exists = ratios.some(r => 
+                            r.numerator === simplified.numerator && 
+                            r.denominator === simplified.denominator
+                        );
+                        
+                        if (!exists) {
+                            ratios.push(simplified);
+                        }
+                    }
+                }
+            }
+            
+            return ratios.sort((a, b) => a.cents - b.cents);
+        }
+
+        function initializeLearningData(ratio) {
+            const key = `${ratio.numerator}:${ratio.denominator}`;
+            if (!learningData.intervals.has(key)) {
+                learningData.intervals.set(key, {
+                    alpha: learningData.alpha0,
+                    beta: learningData.beta0,
+                    totalAttempts: 0,
+                    recentAttempts: [],
+                    lastSeen: Date.now()
+                });
+            }
+            return learningData.intervals.get(key);
+        }
+
+        function updateLearningData(ratio, centsDifference) {
+            const key = `${ratio.numerator}:${ratio.denominator}`;
+            const data = learningData.intervals.get(key);
+            
+            // Consider a guess correct if within 15 cents
+            const isCorrect = centsDifference <= 15;
+            
+            // Update Beta distribution parameters
+            data.alpha += isCorrect ? 1 : 0;
+            data.beta += isCorrect ? 0 : 1;
+            
+            // Update recent attempts (keep last 5)
+            data.recentAttempts.push(isCorrect);
+            
+            data.totalAttempts += 1;
+            data.lastSeen = Date.now();
+            
+            updateMasteryDisplay();
+        }
+
+         function getMasteryProbability(data) {
+            if (data.recentAttempts.length === 0) {
+                return data.alpha / (data.alpha + data.beta);
+            }
+            
+            // Calculate weighted average of recent attempts
+            let weightedSum = 0;
+            let weightSum = 0;
+            
+            data.recentAttempts.forEach((correct, index) => {
+                const weight = getExponentialWeight(data.recentAttempts.length - 1 - index);
+                weightedSum += correct ? weight : 0;
+                weightSum += weight;
+            });
+            
+            // Combine recent weighted performance with overall Beta distribution
+            const recentPerformance = weightedSum / weightSum;
+            const overallPerformance = data.alpha / (data.alpha + data.beta);
+            
+            // Weight recent performance more heavily (0.7 vs 0.3)
+            return 0.7 * recentPerformance + 0.3 * overallPerformance;
+        }
+
+
+        function getAverageOverallMastery() {
+            let total = 0;
+            let count = 0;
+            for (const data of learningData.intervals.values()) {
+                total += getMasteryProbability(data);
+                count += 1;
+            }
+            return (total / count) * 100;
+        }
+
+        function selectNextInterval() {
+            const ratios = generateAllRatios(maxDenominator);
+            
+            // Initialize learning data for all intervals
+            ratios.forEach(ratio => initializeLearningData(ratio));
+            
+            // Calculate selection probabilities using softmax
+            const probabilities = ratios.map(ratio => {
+                const data = learningData.intervals.get(`${ratio.numerator}:${ratio.denominator}`);
+                const mastery = getMasteryProbability(data);
+                
+                // Higher probability for less mastered intervals
+                const score = (1 - mastery) / learningData.temperature;
+                return Math.exp(score);
+            });
+            
+            // Normalize probabilities
+            const sum = probabilities.reduce((a, b) => a + b, 0);
+            const normalizedProbs = probabilities.map(p => p / sum);
+            
+            // Select interval based on probabilities
+            const random = Math.random();
+            let cumulative = 0;
+            for (let i = 0; i < ratios.length; i++) {
+                cumulative += normalizedProbs[i];
+                if (random <= cumulative) {
+                    return ratios[i];
+                }
+            }
+            
+            return ratios[ratios.length - 1];
+        }
+        
+        function updateScore() {
+            document.getElementById('score').textContent = score;
+            document.getElementById('total').textContent = totalQuestions;
+        }
+
+       function updateMasteryDisplay() {
+            const overallMastery = getAverageOverallMastery().toFixed(1);
+            
+            document.getElementById('overallMastery').textContent = overallMastery;
+            
+            // Calculate overall learning trend
+            let totalImprovement = 0;
+            let intervalsWithTrend = 0;
+            
+            // Update reference table with mastery information and trends
+            const rows = document.getElementById('referenceTable').getElementsByTagName('tr');
+            for (let i = 1; i < rows.length; i++) {
+                const ratio = rows[i].dataset.ratio.replace('/', ':');
+                const data = learningData.intervals.get(ratio);
+                if (data) {
+                    const mastery = getMasteryProbability(data);
+                    const trend = getLearningTrend(data);
+                    const masteryCell = rows[i].querySelector('.mastery') || 
+                        rows[i].insertCell();
+                    masteryCell.className = 'mastery';
+                    
+                    let trendIndicator = '';
+                    if (trend) {
+                        totalImprovement += trend.improvement;
+                        intervalsWithTrend++;
+                        trendIndicator = trend.trend > 0 ? '↑' : 
+                                       trend.trend < 0 ? '↓' : '→';
+                    }
+                    
+                    // Create mastery bar with trend indicator
+                    masteryCell.innerHTML = `
+                        <div class="mastery-bar">
+                            <div class="mastery-progress" style="width: ${mastery * 100}%"></div>
+                        </div>
+                        ${(mastery * 100).toFixed(1)}% ${trendIndicator}
+                    `;
+                }
+            }
+            
+            // Add average improvement to stats display
+            const averageImprovement = intervalsWithTrend ? 
+                (totalImprovement / intervalsWithTrend).toFixed(1) : 'N/A';
+            
+            // Update or create the improvement display in the stats section
+            let improvementElement = document.getElementById('averageImprovement');
+            if (!improvementElement) {
+                const statsDiv = document.querySelector('.stats');
+                improvementElement = document.createElement('p');
+                improvementElement.id = 'averageImprovement';
+                statsDiv.appendChild(improvementElement);
+            }
+            improvementElement.textContent = 
+                `Average improvement: ${averageImprovement}${averageImprovement !== 'N/A' ? '%' : ''}`;
+        }
+        
+        function generateNewBaseFrequency() {
+            const minNote = -24; // A2
+            const maxNote = 12;  // A5
+            const semitones = Math.floor(Math.random() * (maxNote - minNote + 1)) + minNote;
+            return 440 * Math.pow(2, semitones/12);
+        }
+        
+        function playSimpleInterval(baseFreq, ratio, timbre = currentTimbre) {
+            if (!audioContext) initAudio();
+            
+            const higherFreq = baseFreq * ratio;
+            const now = audioContext.currentTime;
+            const noteDuration = 1.0;
+            const pauseDuration = 0.5;
+            
+            createComplexTone(baseFreq, now, noteDuration, timbre);
+            createComplexTone(higherFreq, now + noteDuration + pauseDuration, noteDuration, timbre);
+            createComplexTone(baseFreq, now + 2 * (noteDuration + pauseDuration), noteDuration, timbre);
+            createComplexTone(higherFreq, now + 2 * (noteDuration + pauseDuration), noteDuration, timbre);
+        }
+
+        function updateReferenceTable() {
+            const ratios = generateAllRatios(maxDenominator);
+            const table = document.getElementById('referenceTable');
+            
+            let html = `
+                <table>
+                    <tr>
+                        <th>Ratio</th>
+                        <th>Decimal</th>
+                        <th>Cents</th>
+                        <th>Mastery</th>
+                    </tr>
+            `;
+            
+            ratios.forEach(ratio => {
+                const key = `${ratio.numerator}:${ratio.denominator}`;
+                const data = learningData.intervals.get(key) || 
+                    initializeLearningData(ratio);
+                const mastery = getMasteryProbability(data);
+                
+                html += `
+                    <tr data-ratio="${ratio.numerator}/${ratio.denominator}">
+                        <td>${ratio.numerator}:${ratio.denominator}</td>
+                        <td>${ratio.ratio.toFixed(3)}</td>
+                        <td>${ratio.cents.toFixed(1)}</td>
+                        <td class="mastery">
+                            <div class="mastery-bar">
+                                <div class="mastery-progress" style="width: ${mastery * 100}%"></div>
+                            </div>
+                            ${(mastery * 100).toFixed(1)}%
+                        </td>
+                    </tr>
+                `;
+            });
+            
+            html += '</table>';
+            table.innerHTML = html;
+            
+            // Add click handlers to table rows
+            const rows = table.getElementsByTagName('tr');
+            for (let i = 1; i < rows.length; i++) {
+                rows[i].addEventListener('click', function() {
+                    const ratioStr = this.dataset.ratio;
+                    const [num, den] = ratioStr.split('/').map(Number);
+                    playSimpleInterval(currentBaseFrequency, num/den);
+                });
+            }
+        }
+        
+        function playIntervalSequence(ratio) {
+            playSimpleInterval(currentBaseFrequency, ratio.numerator / ratio.denominator);
+        }
+        
+        function generateNewRatio() {
+            return selectNextInterval();
+        }
+        
+        function playNewInterval() {
+            currentRatio = generateNewRatio();
+            currentTimbre = generateRandomTimbre();
+            currentBaseFrequency = generateNewBaseFrequency();
+            playIntervalSequence(currentRatio);
+            
+            document.getElementById('submitGuess').disabled = false;
+            document.getElementById('replayButton').disabled = false;
+            document.getElementById('result').className = '';
+            document.getElementById('result').textContent = '';
+            document.getElementById('guess').value = '';
+        }
+        
+        function replayCurrentInterval() {
+            if (currentRatio) {
+                playIntervalSequence(currentRatio);
+            }
+        }
+
+        function checkGuess() {
+            const guessStr = document.getElementById('guess').value;
+            const guess = parseGuess(guessStr);
+            const resultDiv = document.getElementById('result');
+            
+            if (!guess) {
+                resultDiv.textContent = "Please enter a valid ratio (e.g., 3:2) or cents value";
+                return;
+            }
+            
+            totalQuestions++;
+            const centsDifference = Math.abs(guess.cents - currentRatio.cents);
+            
+            // Update learning data
+            updateLearningData(currentRatio, centsDifference);
+            
+            if (centsDifference <= 15) {
+                score++;
+                resultDiv.textContent = `Correct! The ratio was ${currentRatio.numerator}:${currentRatio.denominator} (${currentRatio.cents.toFixed(1)} cents)`;
+                resultDiv.className = 'correct';
+            } else {
+                resultDiv.textContent = `The ratio was ${currentRatio.numerator}:${currentRatio.denominator} (${currentRatio.cents.toFixed(1)} cents). Your guess was off by ${centsDifference.toFixed(1)} cents.`;
+                resultDiv.className = 'incorrect';
+            }
+            
+            updateScore();
+            document.getElementById('submitGuess').disabled = true;
+        }
+
+        // Event Listeners
+        document.getElementById('playButton').addEventListener('click', playNewInterval);
+        document.getElementById('replayButton').addEventListener('click', replayCurrentInterval);
+        document.getElementById('submitGuess').addEventListener('click', checkGuess);
+        
+        const updateSettings = () => {
+            maxDenominator = parseInt(document.getElementById('maxDenominator').value) || 5;
+            customIntervals = document.getElementById('customIntervals').value.split(",").map((i) => {
+                let r = i.trim().split(':');
+                if (r.length == 2)
+                  return [r[0], r[1]];
+                else
+                  return [];
+            }).filter ((i) => i.length == 2);
+            updateReferenceTable();
+        };
+
+        document.getElementById('maxDenominator').addEventListener('change', updateSettings);
+        document.getElementById('customIntervals').addEventListener('change', updateSettings);
+
+        document.getElementById('resetScore').addEventListener('click', () => {
+            score = 0;
+            totalQuestions = 0;
+            updateScore();
+        });
+
+        document.getElementById('toggleReference').addEventListener('click', () => {
+            const table = document.getElementById('referenceTable');
+            const isHidden = table.style.display === 'none';
+            table.style.display = isHidden ? 'block' : 'none';
+        });
+        
+        document.getElementById('guess').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                checkGuess();
+            }
+        });
+
+        // Initialize everything when the page loads
+        window.addEventListener('load', () => {
+            updateReferenceTable();
+            updateMasteryDisplay();
+        });
+    </script>
+</body>
+</html>
